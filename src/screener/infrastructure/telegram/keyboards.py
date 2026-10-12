@@ -12,43 +12,29 @@ def settings_keyboard(settings: ScreenerSettings) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text=f"Pump: {flag(settings.enable_pump)}",
-                callback_data="toggle:enable_pump",
+                text=f"Лонг: {flag(settings.enable_long)}",
+                callback_data="toggle:enable_long",
             ),
             InlineKeyboardButton(
-                text=f"Dump: {flag(settings.enable_dump)}",
+                text=f"Шорт: {flag(settings.enable_short)}",
+                callback_data="toggle:enable_short",
+            ),
+            InlineKeyboardButton(
+                text=f"Дамп: {flag(settings.enable_dump)}",
                 callback_data="toggle:enable_dump",
             ),
         ],
         [
-            InlineKeyboardButton(
-                text=f"VolSpike: {flag(settings.enable_volume_spike)}",
-                callback_data="toggle:enable_volume_spike",
-            ),
+            InlineKeyboardButton(text="Лонг +1%", callback_data="adj:long:+1"),
+            InlineKeyboardButton(text="Лонг -1%", callback_data="adj:long:-1"),
         ],
         [
-            InlineKeyboardButton(text="Pump +0.5%", callback_data="adj:pump:+0.5"),
-            InlineKeyboardButton(text="Pump -0.5%", callback_data="adj:pump:-0.5"),
+            InlineKeyboardButton(text="Шорт +1%", callback_data="adj:short:+1"),
+            InlineKeyboardButton(text="Шорт -1%", callback_data="adj:short:-1"),
         ],
         [
-            InlineKeyboardButton(text="Dump +0.5%", callback_data="adj:dump:+0.5"),
-            InlineKeyboardButton(text="Dump -0.5%", callback_data="adj:dump:-0.5"),
-        ],
-        [
-            InlineKeyboardButton(text="Vol x +0.5", callback_data="adj:vol:+0.5"),
-            InlineKeyboardButton(text="Vol x -0.5", callback_data="adj:vol:-0.5"),
-        ],
-        [
-            InlineKeyboardButton(text="Cooldown +60s", callback_data="adj:cooldown:+60"),
-            InlineKeyboardButton(text="Cooldown -60s", callback_data="adj:cooldown:-60"),
-        ],
-        [
-            InlineKeyboardButton(
-                text="MinTurnover +50k", callback_data="adj:turnover:+50000"
-            ),
-            InlineKeyboardButton(
-                text="MinTurnover -50k", callback_data="adj:turnover:-50000"
-            ),
+            InlineKeyboardButton(text="Дамп +1%", callback_data="adj:dump:+1"),
+            InlineKeyboardButton(text="Дамп -1%", callback_data="adj:dump:-1"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)

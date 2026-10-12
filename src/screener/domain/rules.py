@@ -20,7 +20,7 @@ def is_dump(change_pct: float, threshold: float) -> bool:
 def side_hint_for(signal_type: SignalType) -> SideHint:
     if signal_type == SignalType.PUMP:
         return SideHint.LONG
-    if signal_type == SignalType.DUMP:
+    if signal_type in {SignalType.SHORT, SignalType.DUMP}:
         return SideHint.SHORT
     return SideHint.FLAT
 

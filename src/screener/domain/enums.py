@@ -5,6 +5,7 @@ from enum import StrEnum
 
 class SignalType(StrEnum):
     PUMP = "PUMP"
+    SHORT = "SHORT"
     DUMP = "DUMP"
     VOLUME_SPIKE = "VOLUME_SPIKE"
     COMPOSITE = "COMPOSITE"

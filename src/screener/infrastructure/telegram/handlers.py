@@ -16,27 +16,56 @@ if TYPE_CHECKING:
 router = Router()
 
 
+def _rule_line(
+    emoji: str,
+    name: str,
+    pct: float,
+    interval_sec: int,
+    enabled: bool,
+    *,
+    signed: bool = False,
+) -> str:
+    value = f"-{pct:g}" if signed else f"{pct:g}"
+    state = "" if enabled else " (OFF)"
+    return f"{emoji} {name}: {value}% за {interval_sec // 60} мин.{state}"
+
+
 def _settings_text(settings: ScreenerSettings) -> str:
-    intervals = ", ".join(f"{i // 60}m" for i in settings.signal_intervals_sec)
-    return (
-        "<b>Настройки скринера</b>\n"
-        f"Pump: {'ON' if settings.enable_pump else 'OFF'} (≥{settings.pump_threshold_pct}%)\n"
-        f"Dump: {'ON' if settings.enable_dump else 'OFF'} (≥{settings.dump_threshold_pct}%)\n"
-        f"Volume spike: {'ON' if settings.enable_volume_spike else 'OFF'} "
-        f"(x{settings.volume_ratio_threshold})\n"
-        f"Интервалы: {intervals}\n"
-        f"Min turnover 24h: {settings.min_turnover_24h_usdt:,.0f} USDT\n"
-        f"Cooldown: {settings.cooldown_sec}s\n"
-        f"Escalate step: {settings.escalate_step_pct}%\n"
-        f"Исключения: {', '.join(sorted(settings.exclude_symbols)) or '—'}"
-    )
+    lines = [
+        "<b>Текущие настройки бота:</b>",
+        _rule_line(
+            "🟢",
+            "Лонг",
+            settings.long_threshold_pct,
+            settings.long_interval_sec,
+            settings.enable_long,
+        ),
+        _rule_line(
+            "🔴",
+            "Шорт",
+            settings.short_threshold_pct,
+            settings.short_interval_sec,
+            settings.enable_short,
+        ),
+        _rule_line(
+            "🔻",
+            "Дамп",
+            settings.dump_threshold_pct,
+            settings.dump_interval_sec,
+            settings.enable_dump,
+            signed=True,
+        ),
+    ]
+    if settings.exclude_symbols:
+        lines.append(f"Исключения: {', '.join(sorted(settings.exclude_symbols))}")
+    return "\n".join(lines)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: AppState) -> None:
     await message.answer(
         "<b>Bybit Market Screener</b>\n"
-        "Мониторинг crypto USDT Linear Perpetual: Pump / Dump / Volume Spike.\n\n"
+        "Мониторинг crypto USDT Linear Perpetual: лонг, шорт и дамп.\n\n"
         "Команды:\n"
         "/status — состояние\n"
         "/settings — настройки мониторинга\n"
@@ -139,18 +168,12 @@ async def on_adj(query: CallbackQuery, state: AppState) -> None:
     _, kind, delta_s = query.data.split(":")
     delta = float(delta_s)
     settings = state.signal_engine.settings.model_copy(deep=True)
-    if kind == "pump":
-        settings.pump_threshold_pct = max(0.1, round(settings.pump_threshold_pct + delta, 2))
+    if kind == "long":
+        settings.long_threshold_pct = max(0.1, round(settings.long_threshold_pct + delta, 2))
+    elif kind == "short":
+        settings.short_threshold_pct = max(0.1, round(settings.short_threshold_pct + delta, 2))
     elif kind == "dump":
         settings.dump_threshold_pct = max(0.1, round(settings.dump_threshold_pct + delta, 2))
-    elif kind == "vol":
-        settings.volume_ratio_threshold = max(
-            0.1, round(settings.volume_ratio_threshold + delta, 2)
-        )
-    elif kind == "cooldown":
-        settings.cooldown_sec = max(0, int(settings.cooldown_sec + delta))
-    elif kind == "turnover":
-        settings.min_turnover_24h_usdt = max(0.0, settings.min_turnover_24h_usdt + delta)
     else:
         await query.answer("Неизвестная настройка", show_alert=True)
         return

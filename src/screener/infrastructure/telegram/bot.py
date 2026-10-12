@@ -40,8 +40,11 @@ class TelegramBotService:
     def bot(self) -> Bot:
         return self._bot
 
-    async def send_signal(self, chat_id: int, signal: SignalEvent) -> None:
-        await self._bot.send_message(chat_id, format_signal_message(signal))
+    async def send_signal(
+        self, chat_id: int, signal: SignalEvent, signals_24h: int = 1
+    ) -> None:
+        text = format_signal_message(signal, signals_24h=signals_24h)
+        await self._bot.send_message(chat_id, text)
 
     async def start_polling(self) -> None:
         import asyncio

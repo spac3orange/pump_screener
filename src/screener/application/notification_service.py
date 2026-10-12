@@ -80,9 +80,14 @@ class NotificationService:
 
     async def _deliver(self, signal: SignalEvent) -> None:
         assert self._send_func is not None
+        signals_24h = 1
+        if self._repo is not None:
+            signals_24h = await self._repo.count_symbol_signals_24h(
+                signal.symbol, now=signal.detected_at
+            )
         for chat_id in self._chat_ids:
             try:
-                await self._send_func(chat_id, signal)
+                await self._send_func(chat_id, signal, signals_24h=signals_24h)
                 if self._repo is not None:
                     await self._repo.save_notification(
                         signal.id, chat_id, DeliveryStatus.SENT

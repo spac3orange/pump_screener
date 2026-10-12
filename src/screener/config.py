@@ -6,21 +6,25 @@ from typing import Annotated
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-ALLOWED_INTERVALS = frozenset({60, 180, 300, 600, 900, 1800, 3600})
+ALLOWED_INTERVALS = frozenset({60, 180, 300, 600, 720, 900, 1800, 3600})
 TRADFI_SYMBOL_TYPES = frozenset({"stock", "ETF", "commodity", "forex"})
 
 
 class ScreenerSettings(BaseModel):
     """User-tunable screener rules (env defaults + DB overlay)."""
 
-    enable_pump: bool = True
+    enable_long: bool = True
+    long_threshold_pct: float = Field(default=40.0, gt=0)
+    long_interval_sec: int = 720
+    enable_short: bool = True
+    short_threshold_pct: float = Field(default=10.0, gt=0)
+    short_interval_sec: int = 1800
     enable_dump: bool = True
-    enable_volume_spike: bool = True
-    signal_intervals_sec: list[int] = Field(
-        default_factory=lambda: [60, 180, 300, 600, 900, 1800, 3600]
-    )
-    pump_threshold_pct: float = Field(default=5.0, gt=0)
-    dump_threshold_pct: float = Field(default=5.0, gt=0)
+    dump_threshold_pct: float = Field(default=40.0, gt=0)
+    dump_interval_sec: int = 900
+    enable_volume_spike: bool = False
+    signal_intervals_sec: list[int] = Field(default_factory=lambda: [720, 900, 1800])
+    pump_threshold_pct: float = Field(default=40.0, gt=0)
     volume_ratio_threshold: float = Field(default=3.0, gt=0)
     min_turnover_24h_usdt: float = Field(default=100_000.0, ge=0)
     min_abs_turnover_window_usdt: float = Field(default=10_000.0, ge=0)
@@ -42,6 +46,13 @@ class ScreenerSettings(BaseModel):
         if bad:
             raise ValueError(f"unsupported intervals: {bad}")
         return sorted(set(value))
+
+    @field_validator("long_interval_sec", "short_interval_sec", "dump_interval_sec")
+    @classmethod
+    def _validate_rule_interval(cls, value: int) -> int:
+        if value not in ALLOWED_INTERVALS:
+            raise ValueError(f"unsupported interval: {value}")
+        return value
 
     @field_validator("exclude_symbols", mode="before")
     @classmethod
@@ -99,14 +110,20 @@ class SystemSettings(BaseSettings):
     )
 
     # Screener defaults mirrored from env for bootstrap
-    enable_pump: bool = True
+    enable_long: bool = True
+    long_threshold_pct: float = 40.0
+    long_interval_sec: int = 720
+    enable_short: bool = True
+    short_threshold_pct: float = 10.0
+    short_interval_sec: int = 1800
     enable_dump: bool = True
-    enable_volume_spike: bool = True
+    dump_threshold_pct: float = 40.0
+    dump_interval_sec: int = 900
+    enable_volume_spike: bool = False
     signal_intervals_sec: Annotated[list[int], NoDecode] = Field(
-        default_factory=lambda: [60, 180, 300, 600, 900, 1800, 3600]
+        default_factory=lambda: [720, 900, 1800]
     )
-    pump_threshold_pct: float = 5.0
-    dump_threshold_pct: float = 5.0
+    pump_threshold_pct: float = 40.0
     volume_ratio_threshold: float = 3.0
     min_turnover_24h_usdt: float = 100_000.0
     min_abs_turnover_window_usdt: float = 10_000.0
@@ -142,7 +159,7 @@ class SystemSettings(BaseSettings):
     @classmethod
     def _parse_intervals(cls, value: object) -> list[int]:
         if value is None or value == "":
-            return [60, 180, 300, 600, 900, 1800, 3600]
+            return [720, 900, 1800]
         if isinstance(value, str):
             return [int(p.strip()) for p in value.split(",") if p.strip()]
         if isinstance(value, (list, tuple)):
@@ -162,12 +179,18 @@ class SystemSettings(BaseSettings):
 
     def to_screener_settings(self) -> ScreenerSettings:
         return ScreenerSettings(
-            enable_pump=self.enable_pump,
+            enable_long=self.enable_long,
+            long_threshold_pct=self.long_threshold_pct,
+            long_interval_sec=self.long_interval_sec,
+            enable_short=self.enable_short,
+            short_threshold_pct=self.short_threshold_pct,
+            short_interval_sec=self.short_interval_sec,
             enable_dump=self.enable_dump,
+            dump_threshold_pct=self.dump_threshold_pct,
+            dump_interval_sec=self.dump_interval_sec,
             enable_volume_spike=self.enable_volume_spike,
             signal_intervals_sec=self.signal_intervals_sec,
             pump_threshold_pct=self.pump_threshold_pct,
-            dump_threshold_pct=self.dump_threshold_pct,
             volume_ratio_threshold=self.volume_ratio_threshold,
             min_turnover_24h_usdt=self.min_turnover_24h_usdt,
             min_abs_turnover_window_usdt=self.min_abs_turnover_window_usdt,

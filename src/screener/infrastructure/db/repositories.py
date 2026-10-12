@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -138,6 +138,16 @@ class Repository:
             )
             await session.execute(stmt)
 
+    async def count_symbol_signals_24h(self, symbol: str, *, now: datetime) -> int:
+        since = now - timedelta(hours=24)
+        async with session_scope(self._sf) as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(SignalRow)
+                .where(SignalRow.symbol == symbol, SignalRow.detected_at >= since)
+            )
+            return int(result.scalar_one())
+
     async def recent_signals(self, limit: int = 20) -> list[SignalRow]:
         async with session_scope(self._sf) as session:
             result = await session.execute(
@@ -155,13 +165,21 @@ class Repository:
             return {"total": len(rows), "by_type": counts}
 
 
+def _has_rule_profile(stored: dict[str, Any]) -> bool:
+    return "long_interval_sec" in stored and "short_interval_sec" in stored
+
+
 async def load_effective_settings(
     repo: Repository, defaults: ScreenerSettings
 ) -> ScreenerSettings:
     stored = await repo.load_screener_settings()
-    if not stored:
-        await repo.save_screener_settings(defaults.model_dump(mode="json"))
-        return defaults
+    if not stored or not _has_rule_profile(stored):
+        data = defaults.model_dump(mode="json")
+        if stored and "exclude_symbols" in stored:
+            data["exclude_symbols"] = stored["exclude_symbols"]
+        settings = ScreenerSettings.model_validate(data)
+        await repo.save_screener_settings(settings.model_dump(mode="json"))
+        return settings
     merged = defaults.model_dump(mode="json")
     merged.update(stored)
     return ScreenerSettings.model_validate(merged)
