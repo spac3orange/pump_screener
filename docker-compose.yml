@@ -8,8 +8,8 @@ services:
       POSTGRES_DB: screener
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Postgres stays on the Compose network only. Publishing 5432 on the host
+    # conflicts with a system PostgreSQL and is not needed by the app.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U screener -d screener"]
       interval: 5s

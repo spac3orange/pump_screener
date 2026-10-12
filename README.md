@@ -76,6 +76,8 @@ Only Telegram user IDs listed in `ADMIN_ID` are accepted.
 3. `cp .env.example .env` and set secrets (never commit `.env`).
 4. `docker compose up -d --build`.
 5. Check `curl http://127.0.0.1:8000/readyz`.
+
+PostgreSQL is not published on the host port `5432`. The app reaches it as `postgres:5432` inside the Compose network. That avoids a conflict when the VPS already runs its own PostgreSQL.
 6. Prefer reverse proxy (Caddy/Nginx) if exposing metrics publicly; otherwise bind to localhost.
 
 Recommended: **2 vCPU / 4 GB RAM / 20–40 GB SSD**.
