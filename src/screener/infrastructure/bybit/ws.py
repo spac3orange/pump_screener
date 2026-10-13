@@ -116,6 +116,10 @@ class WebSocketManager:
         async with self._lock:
             self._running = True
             await self._apply_universe(set(symbols))
+            # Shards planned by update_symbols() before start() have no task yet.
+            for shard in self._shards.values():
+                if shard.task is None:
+                    self._spawn_shard_task(shard)
 
     async def update_symbols(self, symbols: Sequence[str]) -> None:
         async with self._lock:
@@ -140,9 +144,14 @@ class WebSocketManager:
         state = ShardState(shard_id=shard_id, desired=set(symbols))
         self._shards[shard_id] = state
         if self._running:
-            state.task = asyncio.create_task(self._run_shard(state), name=f"ws-shard-{shard_id}")
-            state.task.add_done_callback(self._on_shard_done)
+            self._spawn_shard_task(state)
         return state
+
+    def _spawn_shard_task(self, state: ShardState) -> None:
+        state.task = asyncio.create_task(
+            self._run_shard(state), name=f"ws-shard-{state.shard_id}"
+        )
+        state.task.add_done_callback(self._on_shard_done)
 
     @staticmethod
     def _on_shard_done(task: asyncio.Task[None]) -> None:

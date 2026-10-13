@@ -1,3 +1,5 @@
+import asyncio
+
 import orjson
 import pytest
 
@@ -55,6 +57,25 @@ async def test_overflow_symbols_go_to_new_shard() -> None:
     assert ws.sent == []  # full shard untouched
     assert sorted(mgr._shards) == [0, 1]
     assert mgr._shards[1].desired == {"DUSDT"}
+
+
+@pytest.mark.asyncio
+async def test_start_launches_shards_planned_before_start(monkeypatch) -> None:
+    # Registry.start() fires on_change -> update_symbols() before ws.start().
+    mgr = WebSocketManager("wss://example", on_message=_noop, symbols_per_connection=2)
+    started: list[int] = []
+
+    async def fake_run(state: ShardState) -> None:
+        started.append(state.shard_id)
+
+    monkeypatch.setattr(mgr, "_run_shard", fake_run)
+    await mgr.update_symbols(["AUSDT", "BUSDT", "CUSDT"])
+    assert all(s.task is None for s in mgr._shards.values())
+
+    await mgr.start(["AUSDT", "BUSDT", "CUSDT"])
+    await asyncio.sleep(0)
+    assert sorted(started) == [0, 1]
+    assert all(s.task is not None for s in mgr._shards.values())
 
 
 @pytest.mark.asyncio
