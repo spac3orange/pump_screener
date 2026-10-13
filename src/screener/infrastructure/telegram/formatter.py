@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from screener.domain.enums import SignalType
-from screener.domain.models import SignalEvent
+from screener.domain.models import MarketSignal, RuleMatch
 
 _LABELS = {
     SignalType.PUMP: "Pump",
-    SignalType.SHORT: "Short",
+    SignalType.DROP: "Drop",
     SignalType.DUMP: "Dump",
 }
 
@@ -25,14 +25,25 @@ def base_ticker(symbol: str) -> str:
     return symbol
 
 
-def format_signal_message(signal: SignalEvent, *, signals_24h: int = 1) -> str:
-    minutes = signal.interval_sec // 60
-    label = _LABELS.get(signal.signal_type, signal.signal_type.value)
-    emoji = "🔻" if signal.signal_type == SignalType.DUMP else "🔴"
-    change = f"{signal.change_pct:.2f}"
-    prices = f"{format_price(signal.prev_price)}-{format_price(signal.price)}"
-    return (
-        f"ByBit – {minutes}M – {base_ticker(signal.symbol)}\n"
-        f"{emoji} {label}: {change}% ({prices})\n"
-        f"Signal 24h: {signals_24h}"
-    )
+def _emoji(signal_type: SignalType) -> str:
+    return "🔻" if signal_type == SignalType.DUMP else "🔴"
+
+
+def _match_body(match: RuleMatch) -> str:
+    prices = f"{format_price(match.prev_price)}-{format_price(match.price)}"
+    return f"{match.change_pct:.2f}% ({prices})"
+
+
+def format_signal_message(signal: MarketSignal, *, signals_24h: int = 1) -> str:
+    primary = signal.primary
+    lines = [
+        f"ByBit – {primary.interval_sec // 60}M – {base_ticker(signal.symbol)}",
+        f"{_emoji(primary.signal_type)} {_LABELS[primary.signal_type]}: {_match_body(primary)}",
+    ]
+    for match in signal.secondary():
+        lines.append(
+            f"{_emoji(match.signal_type)} {_LABELS[match.signal_type]} "
+            f"{match.interval_sec // 60}M: {_match_body(match)}"
+        )
+    lines.append(f"Signal 24h: {signals_24h}")
+    return "\n".join(lines)

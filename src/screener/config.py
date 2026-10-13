@@ -6,8 +6,8 @@ from typing import Annotated
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-ALLOWED_INTERVALS = frozenset({60, 180, 300, 600, 720, 900, 1800, 3600})
 TRADFI_SYMBOL_TYPES = frozenset({"stock", "ETF", "commodity", "forex"})
+MAX_RULE_INTERVAL_SEC = 3600
 
 
 class ScreenerSettings(BaseModel):
@@ -22,35 +22,23 @@ class ScreenerSettings(BaseModel):
     enable_dump: bool = True
     dump_threshold_pct: float = Field(default=40.0, gt=0)
     dump_interval_sec: int = 900
-    enable_volume_spike: bool = False
-    signal_intervals_sec: list[int] = Field(default_factory=lambda: [720, 900, 1800])
-    pump_threshold_pct: float = Field(default=40.0, gt=0)
-    volume_ratio_threshold: float = Field(default=3.0, gt=0)
     min_turnover_24h_usdt: float = Field(default=100_000.0, ge=0)
-    min_abs_turnover_window_usdt: float = Field(default=10_000.0, ge=0)
-    volume_baseline_windows: int = Field(default=6, ge=1, le=48)
     cooldown_sec: int = Field(default=300, ge=0)
     escalate_step_pct: float = Field(default=2.0, gt=0)
     reset_ratio: float = Field(default=0.5, gt=0, le=1)
     reset_hold_sec: int = Field(default=60, ge=0)
     exclude_symbols: set[str] = Field(default_factory=set)
-    warmup_suppress_until_live: bool = True
+    # Allow signals whose reference point came from REST kline warmup/backfill.
+    allow_mixed_history: bool = True
+    # Rule matches of one symbol+direction within this window become one alert.
+    correlation_window_ms: int = Field(default=400, ge=0, le=5000)
+    # Price events processed later than this are counted as late (still evaluated).
     max_tick_age_ms: int = Field(default=5000, ge=500)
-
-    @field_validator("signal_intervals_sec")
-    @classmethod
-    def _validate_intervals(cls, value: list[int]) -> list[int]:
-        if not value:
-            raise ValueError("signal_intervals_sec must not be empty")
-        bad = [i for i in value if i not in ALLOWED_INTERVALS]
-        if bad:
-            raise ValueError(f"unsupported intervals: {bad}")
-        return sorted(set(value))
 
     @field_validator("long_interval_sec", "short_interval_sec", "dump_interval_sec")
     @classmethod
     def _validate_rule_interval(cls, value: int) -> int:
-        if value < 60 or value > 3600 or value % 60 != 0:
+        if value < 60 or value > MAX_RULE_INTERVAL_SEC or value % 60 != 0:
             raise ValueError("interval must be a whole number of minutes from 1 to 60")
         return value
 
@@ -66,12 +54,11 @@ class ScreenerSettings(BaseModel):
         raise TypeError("exclude_symbols must be a comma-separated string or collection")
 
     def rule_version(self) -> str:
-        payload = self.model_dump(mode="json")
         # Stable short fingerprint for signal provenance.
         import hashlib
         import json
 
-        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        raw = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
@@ -95,12 +82,18 @@ class SystemSettings(BaseSettings):
     bybit_ws_linear: str = "wss://stream.bybit.com/v5/public/linear"
     ws_symbols_per_connection: int = Field(default=100, ge=10, le=500)
     instrument_refresh_sec: int = Field(default=300, ge=30)
-    stale_connection_sec: int = Field(default=15, ge=5)
+    # Connection watchdog: no frame (data or pong) for this long => reconnect.
+    stale_connection_sec: int = Field(default=30, ge=5)
+    # Lossless price-event queue; when full the WS reader waits (TCP backpressure).
     market_queue_maxsize: int = Field(default=10_000, ge=100)
     ws_args_char_budget: int = Field(default=20_000, ge=1000)
-    ws_ping_interval_sec: float = Field(default=20.0, ge=5)
+    ws_ping_interval_sec: float = Field(default=10.0, ge=5)
+    ws_ack_timeout_sec: float = Field(default=10.0, ge=1)
     kline_warmup_concurrency: int = Field(default=8, ge=1, le=20)
-    kline_warmup_limit: int = Field(default=60, ge=10, le=1000)
+    kline_warmup_limit: int = Field(default=62, ge=10, le=1000)
+    # Gaps after reconnect longer than this are restored from REST 1m klines.
+    gap_backfill_min_sec: int = Field(default=60, ge=5)
+    signal_count_db_timeout_sec: float = Field(default=2.0, gt=0)
 
     telegram_bot_token: str = ""
     # Comma-separated Telegram user IDs allowed to use the bot and receive signals.
@@ -119,21 +112,14 @@ class SystemSettings(BaseSettings):
     enable_dump: bool = True
     dump_threshold_pct: float = 40.0
     dump_interval_sec: int = 900
-    enable_volume_spike: bool = False
-    signal_intervals_sec: Annotated[list[int], NoDecode] = Field(
-        default_factory=lambda: [720, 900, 1800]
-    )
-    pump_threshold_pct: float = 40.0
-    volume_ratio_threshold: float = 3.0
     min_turnover_24h_usdt: float = 100_000.0
-    min_abs_turnover_window_usdt: float = 10_000.0
-    volume_baseline_windows: int = 6
     cooldown_sec: int = 300
     escalate_step_pct: float = 2.0
     reset_ratio: float = 0.5
     reset_hold_sec: int = 60
     exclude_symbols: Annotated[set[str], NoDecode] = Field(default_factory=set)
-    warmup_suppress_until_live: bool = True
+    allow_mixed_history: bool = True
+    signal_correlation_ms: int = 400
     max_tick_age_ms: int = 5000
 
     @field_validator("admin_id", mode="before")
@@ -154,17 +140,6 @@ class SystemSettings(BaseSettings):
         if user_id is None or not self.admin_id:
             return False
         return user_id in self.admin_id
-
-    @field_validator("signal_intervals_sec", mode="before")
-    @classmethod
-    def _parse_intervals(cls, value: object) -> list[int]:
-        if value is None or value == "":
-            return [720, 900, 1800]
-        if isinstance(value, str):
-            return [int(p.strip()) for p in value.split(",") if p.strip()]
-        if isinstance(value, (list, tuple)):
-            return [int(v) for v in value]
-        raise TypeError("signal_intervals_sec must be comma-separated ints")
 
     @field_validator("exclude_symbols", mode="before")
     @classmethod
@@ -188,19 +163,14 @@ class SystemSettings(BaseSettings):
             enable_dump=self.enable_dump,
             dump_threshold_pct=self.dump_threshold_pct,
             dump_interval_sec=self.dump_interval_sec,
-            enable_volume_spike=self.enable_volume_spike,
-            signal_intervals_sec=self.signal_intervals_sec,
-            pump_threshold_pct=self.pump_threshold_pct,
-            volume_ratio_threshold=self.volume_ratio_threshold,
             min_turnover_24h_usdt=self.min_turnover_24h_usdt,
-            min_abs_turnover_window_usdt=self.min_abs_turnover_window_usdt,
-            volume_baseline_windows=self.volume_baseline_windows,
             cooldown_sec=self.cooldown_sec,
             escalate_step_pct=self.escalate_step_pct,
             reset_ratio=self.reset_ratio,
             reset_hold_sec=self.reset_hold_sec,
             exclude_symbols=self.exclude_symbols,
-            warmup_suppress_until_live=self.warmup_suppress_until_live,
+            allow_mixed_history=self.allow_mixed_history,
+            correlation_window_ms=self.signal_correlation_ms,
             max_tick_age_ms=self.max_tick_age_ms,
         )
 

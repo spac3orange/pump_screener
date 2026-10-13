@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from screener.config import ScreenerSettings
 from screener.domain.enums import DeliveryStatus
-from screener.domain.models import Instrument, SignalEvent
+from screener.domain.models import Instrument, MarketSignal
 from screener.infrastructure.db.models import (
     InstrumentRow,
     NotificationRow,
@@ -58,7 +58,7 @@ class Repository:
                 )
                 await session.execute(stmt)
 
-    async def save_signal(self, signal: SignalEvent) -> None:
+    async def save_signal(self, signal: MarketSignal) -> None:
         async with session_scope(self._sf) as session:
             row = SignalRow(
                 id=signal.id,
@@ -69,7 +69,7 @@ class Repository:
                 price=signal.price,
                 prev_price=signal.prev_price,
                 turnover_24h=signal.turnover_24h,
-                volume_ratio=signal.volume_ratio,
+                volume_ratio=None,
                 rule_version=signal.rule_version,
                 payload=signal.to_payload(),
                 detected_at=signal.detected_at,
@@ -138,13 +138,16 @@ class Repository:
             )
             await session.execute(stmt)
 
-    async def count_symbol_signals_24h(self, symbol: str, *, now: datetime) -> int:
+    async def count_symbol_signals_24h(
+        self, symbol: str, *, now: datetime, exclude_id: UUID | None = None
+    ) -> int:
         since = now - timedelta(hours=24)
+        conditions = [SignalRow.symbol == symbol, SignalRow.detected_at >= since]
+        if exclude_id is not None:
+            conditions.append(SignalRow.id != exclude_id)
         async with session_scope(self._sf) as session:
             result = await session.execute(
-                select(func.count())
-                .select_from(SignalRow)
-                .where(SignalRow.symbol == symbol, SignalRow.detected_at >= since)
+                select(func.count()).select_from(SignalRow).where(*conditions)
             )
             return int(result.scalar_one())
 

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramRetryAfter
 
-from screener.domain.models import SignalEvent
+from screener.domain.models import MarketSignal
 from screener.infrastructure.telegram.formatter import format_signal_message
 from screener.infrastructure.telegram.handlers import router
 from screener.infrastructure.telegram.middleware import AdminAccessMiddleware, AppStateMiddleware
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
     from screener.app_state import AppState
 
 logger = logging.getLogger(__name__)
+
+_RETRY_AFTER_ATTEMPTS = 3
 
 
 class TelegramBotService:
@@ -41,14 +45,20 @@ class TelegramBotService:
         return self._bot
 
     async def send_signal(
-        self, chat_id: int, signal: SignalEvent, signals_24h: int = 1
+        self, chat_id: int, signal: MarketSignal, signals_24h: int = 1
     ) -> None:
         text = format_signal_message(signal, signals_24h=signals_24h)
-        await self._bot.send_message(chat_id, text)
+        for attempt in range(_RETRY_AFTER_ATTEMPTS + 1):
+            try:
+                await self._bot.send_message(chat_id, text)
+                return
+            except TelegramRetryAfter as exc:
+                if attempt == _RETRY_AFTER_ATTEMPTS:
+                    raise
+                logger.warning("Telegram flood control: retry after %ss", exc.retry_after)
+                await asyncio.sleep(exc.retry_after)
 
     async def start_polling(self) -> None:
-        import asyncio
-
         self._task = asyncio.create_task(
             self._dp.start_polling(self._bot, handle_signals=False),
             name="telegram-polling",

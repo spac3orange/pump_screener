@@ -4,17 +4,16 @@ from enum import StrEnum
 
 
 class SignalType(StrEnum):
+    """Market event detected by a price rule. Not a trading decision."""
+
     PUMP = "PUMP"
-    SHORT = "SHORT"
+    DROP = "DROP"
     DUMP = "DUMP"
-    VOLUME_SPIKE = "VOLUME_SPIKE"
-    COMPOSITE = "COMPOSITE"
 
 
-class SideHint(StrEnum):
-    LONG = "LONG"
-    SHORT = "SHORT"
-    FLAT = "FLAT"
+class Direction(StrEnum):
+    UP = "UP"
+    DOWN = "DOWN"
 
 
 class PriceSource(StrEnum):
@@ -29,6 +28,11 @@ class HistorySource(StrEnum):
 class HistoryQuality(StrEnum):
     KLINE = "kline"
     MIXED = "mixed"
+    LIVE = "live"
+
+
+class PriceEventKind(StrEnum):
+    SNAPSHOT_SEED = "snapshot_seed"
     LIVE = "live"
 
 

@@ -44,7 +44,7 @@ include = ["src/screener", "alembic", "alembic.ini", "README.md"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100

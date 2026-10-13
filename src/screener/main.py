@@ -5,14 +5,16 @@ import signal
 from contextlib import asynccontextmanager
 
 import uvicorn
-from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 
+from alembic import command
 from screener.app_state import AppState
+from screener.application.correlator import SignalCorrelator
 from screener.application.instrument_registry import InstrumentRegistry
 from screener.application.market_processor import MarketDataProcessor
 from screener.application.notification_service import NotificationService
+from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
 from screener.application.signal_engine import SignalEngine
 from screener.config import SystemSettings, get_system_settings
@@ -48,13 +50,15 @@ async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker,
 
     rest = BybitRestClient(system.bybit_rest_base)
     history = PriceHistoryManager()
-    processor = MarketDataProcessor(
-        history,
-        max_tick_age_ms=screener_settings.max_tick_age_ms,
-    )
+    processor = MarketDataProcessor(history)
     signal_engine = SignalEngine(history, screener_settings)
+    correlator = SignalCorrelator(
+        window_ms=screener_settings.correlation_window_ms,
+        rule_version=lambda: signal_engine.rule_version,
+    )
+    signal_engine.on_matches = correlator.add
 
-    async def _noop_msg(_msg: dict) -> None:
+    async def _noop_msg(_msg: dict, _mono: float) -> None:
         return None
 
     ws_manager = WebSocketManager(
@@ -64,6 +68,7 @@ async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker,
         args_char_budget=system.ws_args_char_budget,
         ping_interval_sec=system.ws_ping_interval_sec,
         stale_connection_sec=float(system.stale_connection_sec),
+        ack_timeout_sec=system.ws_ack_timeout_sec,
     )
 
     registry = InstrumentRegistry(
@@ -73,9 +78,12 @@ async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker,
         instrument_sink=repo,
     )
 
+    persistence = PersistenceService(repo)
     notifications = NotificationService(
         chat_ids=system.admin_id,
-        repo=repo,
+        counter=repo,
+        persistence=persistence,
+        count_timeout_sec=system.signal_count_db_timeout_sec,
     )
 
     state = AppState(
@@ -85,11 +93,14 @@ async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker,
         history=history,
         processor=processor,
         signal_engine=signal_engine,
+        correlator=correlator,
         registry=registry,
         ws_manager=ws_manager,
+        persistence=persistence,
         notifications=notifications,
         extras={"engine": engine},
     )
+    correlator.on_signal = state.dispatch_signal
 
     tg: TelegramBotService | None = None
     if system.telegram_bot_token and system.admin_id:
@@ -114,6 +125,7 @@ def build_fastapi() -> FastAPI:
         state, worker, tg = await build_runtime(system)
         _app.state.app_state = state
 
+        await state.persistence.start()
         await state.notifications.start()
         await worker.start()
         if tg is not None:
@@ -123,10 +135,11 @@ def build_fastapi() -> FastAPI:
             yield
         finally:
             logger.info("Screener shutting down")
-            if tg is not None:
-                await tg.stop()
             await worker.stop()
             await state.notifications.stop()
+            if tg is not None:
+                await tg.stop()
+            await state.persistence.stop()
             await state.rest.aclose()
             engine = state.extras.get("engine")
             if engine is not None:

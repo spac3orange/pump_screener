@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from screener.config import ScreenerSettings, SystemSettings, get_system_settings
 
 
@@ -10,28 +13,43 @@ def test_screener_settings_defaults() -> None:
     assert s.short_interval_sec == 1800
     assert s.dump_threshold_pct == 40.0
     assert s.dump_interval_sec == 900
-    assert s.enable_volume_spike is False
+    assert s.allow_mixed_history is True
+    assert s.correlation_window_ms == 400
     assert s.rule_version()
 
 
 def test_invalid_interval_rejected() -> None:
-    try:
-        ScreenerSettings(signal_intervals_sec=[120])
-        assert False, "expected validation error"
-    except Exception:
-        pass
+    with pytest.raises(ValidationError):
+        ScreenerSettings(long_interval_sec=120 + 30)
+
+
+def test_old_stored_json_with_dead_settings_loads() -> None:
+    stored = {
+        "long_interval_sec": 720,
+        "short_interval_sec": 1800,
+        "enable_volume_spike": True,
+        "signal_intervals_sec": [60, 300],
+        "pump_threshold_pct": 5.0,
+        "volume_ratio_threshold": 3.0,
+        "min_abs_turnover_window_usdt": 1.0,
+        "volume_baseline_windows": 6,
+        "warmup_suppress_until_live": True,
+    }
+    settings = ScreenerSettings.model_validate(stored)
+    dumped = settings.model_dump()
+    assert "enable_volume_spike" not in dumped
+    assert "signal_intervals_sec" not in dumped
 
 
 def test_admin_id_from_env(monkeypatch) -> None:
     monkeypatch.setenv("ADMIN_ID", "111,222")
-    monkeypatch.setenv("SIGNAL_INTERVALS_SEC", "60,300")
     monkeypatch.setenv("EXCLUDE_SYMBOLS", "BTCUSDT,ethusdt")
+    monkeypatch.setenv("SIGNAL_INTERVALS_SEC", "60,300")  # dead key is ignored
     get_system_settings.cache_clear()
     settings = SystemSettings()
     assert settings.admin_id == [111, 222]
     assert settings.is_admin(111)
     assert not settings.is_admin(999)
-    assert settings.signal_intervals_sec == [60, 300]
     assert settings.exclude_symbols == {"BTCUSDT", "ETHUSDT"}
     get_system_settings.cache_clear()
 

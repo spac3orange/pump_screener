@@ -3,11 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from screener.domain.models import Instrument, SignalEvent
-
-
-class Clock(Protocol):
-    def time_ms(self) -> int: ...
+from screener.domain.models import Instrument, MarketSignal
 
 
 class InstrumentSource(Protocol):
@@ -15,11 +11,13 @@ class InstrumentSource(Protocol):
 
 
 class NotifierPort(Protocol):
-    async def send_signal(self, chat_id: int, signal: SignalEvent) -> None: ...
+    async def send_signal(
+        self, chat_id: int, signal: MarketSignal, signals_24h: int = 1
+    ) -> None: ...
 
 
 class SignalSink(Protocol):
-    async def save_signal(self, signal: SignalEvent) -> None: ...
+    async def save_signal(self, signal: MarketSignal) -> None: ...
 
 
 class SettingsStore(Protocol):

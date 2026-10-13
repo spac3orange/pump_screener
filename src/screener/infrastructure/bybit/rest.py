@@ -54,14 +54,18 @@ class BybitRestClient:
         interval: str = "1",
         limit: int = 60,
         category: str = "linear",
+        start_ms: int | None = None,
+        end_ms: int | None = None,
     ) -> list[list[str]]:
-        result = await self._get(
-            "/v5/market/kline",
-            {
-                "category": category,
-                "symbol": symbol,
-                "interval": interval,
-                "limit": limit,
-            },
-        )
+        params: dict[str, Any] = {
+            "category": category,
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+        }
+        if start_ms is not None:
+            params["start"] = start_ms
+        if end_ms is not None:
+            params["end"] = end_ms
+        result = await self._get("/v5/market/kline", params)
         return list(result.get("list") or [])

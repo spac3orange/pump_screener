@@ -2,100 +2,138 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import datetime, timedelta
+from typing import Protocol
+from uuid import UUID
 
 from screener.application.metrics import metrics
+from screener.application.persistence_service import PersistenceService
+from screener.application.supervisor import cancel_tasks, supervise
 from screener.domain.enums import DeliveryStatus
-from screener.domain.models import SignalEvent
-from screener.infrastructure.db.repositories import Repository
+from screener.domain.models import MarketSignal
 
 logger = logging.getLogger(__name__)
 
+SendFunc = Callable[..., Awaitable[None]]
+
+
+class SignalCounter(Protocol):
+    async def count_symbol_signals_24h(
+        self, symbol: str, *, now: datetime, exclude_id: UUID | None = None
+    ) -> int: ...
+
+
+class RecentSignals:
+    """In-memory per-symbol signal timestamps for the last 24 hours."""
+
+    def __init__(self) -> None:
+        self._by_symbol: dict[str, deque[datetime]] = defaultdict(deque)
+
+    def record(self, symbol: str, at: datetime) -> None:
+        self._by_symbol[symbol].append(at)
+
+    def count(self, symbol: str, now: datetime) -> int:
+        items = self._by_symbol.get(symbol)
+        if not items:
+            return 0
+        since = now - timedelta(hours=24)
+        while items and items[0] < since:
+            items.popleft()
+        return len(items)
+
 
 class NotificationService:
-    """Bounded queue between signal engine and Telegram delivery."""
+    """Bounded queue between signal dispatch and Telegram delivery.
+
+    Independent of persistence: Signal 24h uses a bounded DB query and falls
+    back to an in-memory counter, and delivery results are handed to the
+    persistence writer instead of being written inline.
+    """
 
     def __init__(
         self,
         *,
         chat_ids: Sequence[int],
-        repo: Repository | None = None,
-        send_func=None,
+        counter: SignalCounter | None = None,
+        persistence: PersistenceService | None = None,
+        send_func: SendFunc | None = None,
         maxsize: int = 1000,
+        count_timeout_sec: float = 2.0,
     ) -> None:
         self._chat_ids = list(chat_ids)
-        self._repo = repo
+        self._counter = counter
+        self._persistence = persistence
         self._send_func = send_func
-        self._queue: asyncio.Queue[SignalEvent] = asyncio.Queue(maxsize=maxsize)
-        self._task: asyncio.Task[None] | None = None
-        self._stop = asyncio.Event()
+        self._count_timeout = count_timeout_sec
+        self._queue: asyncio.Queue[MarketSignal] = asyncio.Queue(maxsize=maxsize)
+        self._recent = RecentSignals()
+        self._tasks: list[asyncio.Task] = []
 
-    def set_send_func(self, send_func) -> None:
+    def set_send_func(self, send_func: SendFunc) -> None:
         self._send_func = send_func
 
     def set_chat_ids(self, chat_ids: Sequence[int]) -> None:
         self._chat_ids = list(chat_ids)
 
     async def start(self) -> None:
-        self._stop.clear()
-        self._task = asyncio.create_task(self._loop(), name="notification-service")
+        self._tasks.append(supervise("notifications", self._loop))
 
     async def stop(self) -> None:
-        self._stop.set()
-        if self._task:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
-            self._task = None
+        await cancel_tasks(self._tasks)
 
-    async def enqueue(self, signal: SignalEvent) -> None:
+    def enqueue(self, signal: MarketSignal) -> None:
+        self._recent.record(signal.symbol, signal.detected_at)
         if not self._chat_ids or self._send_func is None:
             return
-        try:
-            self._queue.put_nowait(signal)
-        except asyncio.QueueFull:
+        if self._queue.full():
             try:
-                _ = self._queue.get_nowait()
+                self._queue.get_nowait()
                 self._queue.task_done()
             except asyncio.QueueEmpty:
                 pass
-            metrics.record_drop()
-            try:
-                self._queue.put_nowait(signal)
-            except asyncio.QueueFull:
-                metrics.record_drop()
-                logger.warning("Notification queue full; dropping signal %s", signal.symbol)
+            metrics.notification_drops_total += 1
+            logger.warning("Notification queue full; dropped oldest alert")
+        self._queue.put_nowait(signal)
 
     async def _loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                signal = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-            except TimeoutError:
-                continue
-            except asyncio.CancelledError:
-                raise
+        while True:
+            signal = await self._queue.get()
             try:
                 await self._deliver(signal)
             finally:
                 self._queue.task_done()
 
-    async def _deliver(self, signal: SignalEvent) -> None:
+    async def signals_24h(self, signal: MarketSignal) -> int:
+        in_memory = self._recent.count(signal.symbol, signal.detected_at)
+        from_db = 0
+        if self._counter is not None:
+            try:
+                from_db = 1 + await asyncio.wait_for(
+                    self._counter.count_symbol_signals_24h(
+                        signal.symbol, now=signal.detected_at, exclude_id=signal.id
+                    ),
+                    timeout=self._count_timeout,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Signal 24h count fell back to memory", exc_info=True)
+        return max(1, in_memory, from_db)
+
+    async def _deliver(self, signal: MarketSignal) -> None:
         assert self._send_func is not None
-        signals_24h = 1
-        if self._repo is not None:
-            signals_24h = await self._repo.count_symbol_signals_24h(
-                signal.symbol, now=signal.detected_at
-            )
+        signals_24h = await self.signals_24h(signal)
         for chat_id in self._chat_ids:
             try:
                 await self._send_func(chat_id, signal, signals_24h=signals_24h)
-                if self._repo is not None:
-                    await self._repo.save_notification(
-                        signal.id, chat_id, DeliveryStatus.SENT
-                    )
+                status, error = DeliveryStatus.SENT, None
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 metrics.record_error()
                 logger.exception("Telegram delivery failed chat_id=%s", chat_id)
-                if self._repo is not None:
-                    await self._repo.save_notification(
-                        signal.id, chat_id, DeliveryStatus.FAILED, error=str(exc)
-                    )
+                status, error = DeliveryStatus.FAILED, str(exc)
+            if self._persistence is not None:
+                self._persistence.enqueue_delivery(signal.id, chat_id, status, error)

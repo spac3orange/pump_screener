@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message
 
 from screener.application.metrics import metrics
 from screener.config import ScreenerSettings
+from screener.infrastructure.telegram.help_text import build_help_messages
 from screener.infrastructure.telegram.keyboards import settings_keyboard
 from screener.infrastructure.telegram.settings_input import (
     FIELDS,
@@ -15,6 +16,7 @@ from screener.infrastructure.telegram.settings_input import (
     SettingInputError,
     apply_setting_text,
     prompt_for,
+    toggle_rule,
 )
 
 if TYPE_CHECKING:
@@ -84,16 +86,12 @@ async def cmd_start(message: Message, state: AppState) -> None:
 
 @router.message(Command("help"))
 async def cmd_help(message: Message, state: AppState) -> None:
-    await message.answer(
-        "<b>Справка</b>\n"
-        "/start — о сервисе\n"
-        "/status — готовность, инструменты, WS\n"
-        "/settings — период и процент лонга, шорта и дампа\n"
-        "/signals — последние 10 сигналов из БД\n"
-        "/stats — счётчики сигналов и ошибок\n\n"
-        "Сигналы приходят автоматически при срабатывании правил.\n"
-        "Доступ только для ADMIN_ID из .env."
+    parts = build_help_messages(
+        state.signal_engine.settings,
+        instruments=metrics.snapshot()["instruments_active"],
     )
+    for part in parts:
+        await message.answer(part)
 
 
 @router.message(Command("status"))
@@ -106,8 +104,12 @@ async def cmd_status(message: Message, state: AppState) -> None:
         f"Instruments: {snap['instruments_active']}\n"
         f"WS connections: {snap['ws_connections']}\n"
         f"Msg/s: {snap['messages_per_sec']}\n"
+        f"Live price/s: {snap['rates'].get('live_price_events_per_sec', 0.0)}\n"
         f"Signals (runtime): {snap['signals_total']}\n"
-        f"Queue drops: {snap['queue_drops']}\n"
+        f"Raw drops: {snap['raw_protocol_drops_total']}, lost price events: "
+        f"{snap['lost_price_events']}\n"
+        f"Reconnects: {snap['ws_reconnects']}, gaps: {snap['history_gaps_total']}\n"
+        f"p95 ms: {snap['pipeline_latency_ms']['p95']}\n"
         f"Last msg age ms: {snap['last_message_age_ms']}\n"
         f"Admin IDs: <code>{admins}</code>"
     )
@@ -149,6 +151,24 @@ async def cmd_stats(message: Message, state: AppState) -> None:
         f"Errors: {snap['errors_total']}\n"
         f"WS reconnects: {snap['ws_reconnects']}"
     )
+
+
+@router.callback_query(F.data.startswith("toggle:"))
+async def on_toggle_rule(query: CallbackQuery, state: AppState) -> None:
+    assert query.data is not None and query.from_user is not None
+    kind = query.data.split(":", 1)[1]
+    try:
+        updated = toggle_rule(state.signal_engine.settings, kind)
+    except SettingInputError:
+        await query.answer("Неизвестная настройка", show_alert=True)
+        return
+    await state.apply_settings(updated, chat_id=query.from_user.id)
+    if query.message is not None:
+        await query.message.edit_text(
+            _settings_text(updated),
+            reply_markup=settings_keyboard(updated),
+        )
+    await query.answer("Обновлено")
 
 
 @router.callback_query(F.data.startswith("set:"))

@@ -5,8 +5,23 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from screener.config import ScreenerSettings
 
 
-def settings_keyboard(_settings: ScreenerSettings) -> InlineKeyboardMarkup:
+def _flag(enabled: bool) -> str:
+    return "ON" if enabled else "OFF"
+
+
+def settings_keyboard(settings: ScreenerSettings) -> InlineKeyboardMarkup:
     rows = [
+        [
+            InlineKeyboardButton(
+                text=f"Лонг {_flag(settings.enable_long)}", callback_data="toggle:long"
+            ),
+            InlineKeyboardButton(
+                text=f"Шорт {_flag(settings.enable_short)}", callback_data="toggle:short"
+            ),
+            InlineKeyboardButton(
+                text=f"Дамп {_flag(settings.enable_dump)}", callback_data="toggle:dump"
+            ),
+        ],
         [
             InlineKeyboardButton(text="🟢 Период лонг", callback_data="set:long:period"),
             InlineKeyboardButton(text="➗ Процент лонг", callback_data="set:long:pct"),

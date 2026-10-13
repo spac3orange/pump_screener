@@ -20,6 +20,11 @@ _PCT_ATTR = {
     "short": "short_threshold_pct",
     "dump": "dump_threshold_pct",
 }
+_ENABLE_ATTR = {
+    "long": "enable_long",
+    "short": "enable_short",
+    "dump": "enable_dump",
+}
 
 
 class SettingInputError(ValueError):
@@ -54,6 +59,15 @@ def parse_percent(text: str) -> float:
     if value <= 0 or value > 500:
         raise SettingInputError("Нужно число больше 0 и не больше 500.")
     return round(value, 2)
+
+
+def toggle_rule(settings: ScreenerSettings, kind: str) -> ScreenerSettings:
+    if kind not in _ENABLE_ATTR:
+        raise SettingInputError("Неизвестное правило.")
+    updated = settings.model_copy(deep=True)
+    attr = _ENABLE_ATTR[kind]
+    setattr(updated, attr, not getattr(updated, attr))
+    return updated
 
 
 def apply_setting_text(

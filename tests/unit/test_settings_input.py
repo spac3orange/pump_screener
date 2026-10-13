@@ -11,12 +11,24 @@ from screener.infrastructure.telegram.settings_input import (
     parse_percent,
     parse_period_minutes,
     prompt_for,
+    toggle_rule,
 )
 
 
-def test_settings_keyboard_has_six_buttons() -> None:
-    markup = settings_keyboard(ScreenerSettings())
-    buttons = [button for row in markup.inline_keyboard for button in row]
+def test_toggle_rule_flips_only_that_rule() -> None:
+    updated = toggle_rule(ScreenerSettings(), "dump")
+    assert updated.enable_dump is False
+    assert updated.enable_long is True and updated.enable_short is True
+    with pytest.raises(SettingInputError):
+        toggle_rule(ScreenerSettings(), "volume")
+
+
+def test_settings_keyboard_has_toggles_and_six_buttons() -> None:
+    markup = settings_keyboard(ScreenerSettings(enable_short=False))
+    toggles = markup.inline_keyboard[0]
+    assert [b.text for b in toggles] == ["Лонг ON", "Шорт OFF", "Дамп ON"]
+    assert [b.callback_data for b in toggles] == ["toggle:long", "toggle:short", "toggle:dump"]
+    buttons = [button for row in markup.inline_keyboard[1:] for button in row]
     assert [button.text for button in buttons] == [
         "🟢 Период лонг",
         "➗ Процент лонг",
@@ -84,7 +96,9 @@ def test_prompt_shows_current_values() -> None:
 
 
 def test_rule_interval_accepts_any_whole_minute() -> None:
-    settings = ScreenerSettings(long_interval_sec=420, short_interval_sec=60, dump_interval_sec=3600)
+    settings = ScreenerSettings(
+        long_interval_sec=420, short_interval_sec=60, dump_interval_sec=3600
+    )
     assert settings.long_interval_sec == 420
     assert settings.short_interval_sec == 60
     assert settings.dump_interval_sec == 3600
@@ -108,4 +122,5 @@ def test_command_update_user_id() -> None:
     update = Update(update_id=1, message=message)
     assert _command_user_id(update) == 77
     assert _command_user_id(message) == 77
-    assert _command_user_id(Update(update_id=2, message=message.model_copy(update={"text": "12"}))) is None
+    plain = message.model_copy(update={"text": "12"})
+    assert _command_user_id(Update(update_id=2, message=plain)) is None

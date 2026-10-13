@@ -2,7 +2,7 @@
 
 Real-time monitor for **crypto USDT Linear Perpetual** contracts on Bybit.
 
-Detects Pump / Dump / Volume Spike signals from public ticker streams, stores history in PostgreSQL, and notifies via Telegram.
+Detects Pump / Drop / Dump signals (on `lastPrice`) from public ticker streams, stores history in PostgreSQL, and notifies via Telegram.
 
 > MVP does **not** place orders. No trading API keys required.
 
