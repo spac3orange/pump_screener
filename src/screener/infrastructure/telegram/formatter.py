@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 from screener.domain.enums import SignalType
 from screener.domain.models import MarketSignal, RuleMatch
 
@@ -25,6 +27,13 @@ def base_ticker(symbol: str) -> str:
     return symbol
 
 
+def ticker_link(symbol: str) -> str:
+    """HTML link to the Bybit USDT perpetual page; label is the base ticker."""
+    label = escape(base_ticker(symbol))
+    href = escape(bybit_trade_url(symbol), quote=True)
+    return f'<a href="{href}">{label}</a>'
+
+
 def _emoji(signal_type: SignalType) -> str:
     return "🔻" if signal_type == SignalType.DUMP else "🔴"
 
@@ -37,7 +46,7 @@ def _match_body(match: RuleMatch) -> str:
 def format_signal_message(signal: MarketSignal, *, signals_24h: int = 1) -> str:
     primary = signal.primary
     lines = [
-        f"ByBit – {primary.interval_sec // 60}M – {base_ticker(signal.symbol)}",
+        f"ByBit – {primary.interval_sec // 60}M – {ticker_link(signal.symbol)}",
         f"{_emoji(primary.signal_type)} {_LABELS[primary.signal_type]}: {_match_body(primary)}",
     ]
     for match in signal.secondary():

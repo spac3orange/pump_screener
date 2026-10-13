@@ -12,7 +12,7 @@ from screener.infrastructure.telegram.help_text import (
 from screener.infrastructure.telegram.settings_input import apply_setting_text, toggle_rule
 
 NBSP = "\u00a0"
-ALLOWED_TAGS = {"b", "i", "code", "pre"}
+ALLOWED_TAGS = {"b", "i", "code", "pre", "a"}
 
 
 def _custom() -> ScreenerSettings:
