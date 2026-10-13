@@ -9,6 +9,13 @@ from aiogram.types import CallbackQuery, Message
 from screener.application.metrics import metrics
 from screener.config import ScreenerSettings
 from screener.infrastructure.telegram.keyboards import settings_keyboard
+from screener.infrastructure.telegram.settings_input import (
+    FIELDS,
+    RULES,
+    SettingInputError,
+    apply_setting_text,
+    prompt_for,
+)
 
 if TYPE_CHECKING:
     from screener.app_state import AppState
@@ -81,7 +88,7 @@ async def cmd_help(message: Message, state: AppState) -> None:
         "<b>Справка</b>\n"
         "/start — о сервисе\n"
         "/status — готовность, инструменты, WS\n"
-        "/settings — пороги и переключатели (inline-кнопки)\n"
+        "/settings — период и процент лонга, шорта и дампа\n"
         "/signals — последние 10 сигналов из БД\n"
         "/stats — счётчики сигналов и ошибок\n\n"
         "Сигналы приходят автоматически при срабатывании правил.\n"
@@ -144,43 +151,43 @@ async def cmd_stats(message: Message, state: AppState) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("toggle:"))
-async def on_toggle(query: CallbackQuery, state: AppState) -> None:
+@router.callback_query(F.data.startswith("set:"))
+async def on_set_field(query: CallbackQuery, state: AppState) -> None:
     assert query.data is not None and query.from_user is not None
-    field = query.data.split(":", 1)[1]
-    settings = state.signal_engine.settings.model_copy(deep=True)
-    if not hasattr(settings, field):
+    parts = query.data.split(":")
+    if len(parts) != 3 or parts[1] not in RULES or parts[2] not in FIELDS:
         await query.answer("Неизвестная настройка", show_alert=True)
         return
-    setattr(settings, field, not bool(getattr(settings, field)))
-    await state.apply_settings(settings, chat_id=query.from_user.id)
-    if query.message:
-        await query.message.edit_text(
-            _settings_text(settings),
-            reply_markup=settings_keyboard(settings),
-        )
-    await query.answer("Обновлено")
+    _, kind, field_name = parts
+    state.begin_setting_edit(query.from_user.id, kind, field_name)
+    prompt = prompt_for(kind, field_name, state.signal_engine.settings)
+    if query.message is not None:
+        await query.message.answer(prompt)
+    await query.answer()
 
 
-@router.callback_query(F.data.startswith("adj:"))
-async def on_adj(query: CallbackQuery, state: AppState) -> None:
-    assert query.data is not None and query.from_user is not None
-    _, kind, delta_s = query.data.split(":")
-    delta = float(delta_s)
-    settings = state.signal_engine.settings.model_copy(deep=True)
-    if kind == "long":
-        settings.long_threshold_pct = max(0.1, round(settings.long_threshold_pct + delta, 2))
-    elif kind == "short":
-        settings.short_threshold_pct = max(0.1, round(settings.short_threshold_pct + delta, 2))
-    elif kind == "dump":
-        settings.dump_threshold_pct = max(0.1, round(settings.dump_threshold_pct + delta, 2))
-    else:
-        await query.answer("Неизвестная настройка", show_alert=True)
+@router.message(F.text, ~F.text.startswith("/"))
+async def on_setting_value(message: Message, state: AppState) -> None:
+    if message.from_user is None or not message.text:
         return
-    await state.apply_settings(settings, chat_id=query.from_user.id)
-    if query.message:
-        await query.message.edit_text(
-            _settings_text(settings),
-            reply_markup=settings_keyboard(settings),
+    pending = state.pending_edit(message.from_user.id)
+    if pending is None:
+        return
+    kind, field_name = pending
+    try:
+        updated = apply_setting_text(
+            state.signal_engine.settings,
+            kind,
+            field_name,
+            message.text,
         )
-    await query.answer("Обновлено")
+    except SettingInputError as exc:
+        hint = prompt_for(kind, field_name, state.signal_engine.settings)
+        await message.answer(f"{exc}\n{hint}")
+        return
+    state.clear_pending_edit(message.from_user.id)
+    await state.apply_settings(updated, chat_id=message.from_user.id)
+    await message.answer(
+        _settings_text(updated),
+        reply_markup=settings_keyboard(updated),
+    )

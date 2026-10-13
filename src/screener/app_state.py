@@ -26,6 +26,16 @@ class AppState:
     ws_manager: WebSocketManager
     notifications: NotificationService
     extras: dict[str, Any] = field(default_factory=dict)
+    pending_edits: dict[int, tuple[str, str]] = field(default_factory=dict)
+
+    def begin_setting_edit(self, user_id: int, kind: str, field_name: str) -> None:
+        self.pending_edits[user_id] = (kind, field_name)
+
+    def pending_edit(self, user_id: int) -> tuple[str, str] | None:
+        return self.pending_edits.get(user_id)
+
+    def clear_pending_edit(self, user_id: int) -> None:
+        self.pending_edits.pop(user_id, None)
 
     async def apply_settings(self, settings: ScreenerSettings, *, chat_id: int | None = None) -> None:
         self.signal_engine.update_settings(settings)

@@ -50,8 +50,8 @@ class ScreenerSettings(BaseModel):
     @field_validator("long_interval_sec", "short_interval_sec", "dump_interval_sec")
     @classmethod
     def _validate_rule_interval(cls, value: int) -> int:
-        if value not in ALLOWED_INTERVALS:
-            raise ValueError(f"unsupported interval: {value}")
+        if value < 60 or value > 3600 or value % 60 != 0:
+            raise ValueError("interval must be a whole number of minutes from 1 to 60")
         return value
 
     @field_validator("exclude_symbols", mode="before")
