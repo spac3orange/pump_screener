@@ -56,6 +56,18 @@ class Metrics:
     event_loop_lag_max_ms: float = 0.0
     last_message_age_ms: float | None = None
     ready: bool = False
+    # Optional trading module (never exposes balances).
+    trading_enabled: bool = False
+    trading_ready: bool = False
+    trade_signals_received_total: int = 0
+    trade_signals_ignored_total: int = 0
+    trade_signals_skipped_total: int = 0
+    orders_submitted_total: int = 0
+    orders_filled_total: int = 0
+    orders_failed_total: int = 0
+    open_positions: int = 0
+    active_orders: int = 0
+    last_private_api_success_ts: float | None = None
     rates: dict[str, float] = field(default_factory=dict)
     _latency: array = field(default_factory=lambda: array("d", [0.0] * _LATENCY_SAMPLES))
     _latency_n: int = 0

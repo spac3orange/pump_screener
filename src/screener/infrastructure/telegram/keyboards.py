@@ -9,6 +9,42 @@ def _flag(enabled: bool) -> str:
     return "ON" if enabled else "OFF"
 
 
+def trading_keyboard(*, enabled: bool, mainnet: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if enabled:
+        rows.append(
+            [InlineKeyboardButton(text="🔴 Выключить торговлю", callback_data="trading:off")]
+        )
+    elif mainnet:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🟢 Включить торговлю (MAINNET)",
+                    callback_data="trading:enable_ask",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [InlineKeyboardButton(text="🟢 Включить торговлю", callback_data="trading:on")]
+        )
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="trading:refresh")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def trading_mainnet_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Подтвердить MAINNET", callback_data="trading:enable_confirm"
+                ),
+                InlineKeyboardButton(text="Отмена", callback_data="trading:enable_cancel"),
+            ]
+        ]
+    )
+
+
 def settings_keyboard(settings: ScreenerSettings) -> InlineKeyboardMarkup:
     rows = [
         [

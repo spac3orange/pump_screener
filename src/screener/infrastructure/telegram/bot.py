@@ -48,6 +48,16 @@ class TelegramBotService:
         self, chat_id: int, signal: MarketSignal, signals_24h: int = 1
     ) -> None:
         text = format_signal_message(signal, signals_24h=signals_24h)
+        await self._send_with_retry(chat_id, text)
+
+    async def broadcast_text(self, text: str) -> None:
+        for chat_id in self._app_state.system.admin_id:
+            try:
+                await self._send_with_retry(chat_id, text)
+            except Exception:
+                logger.exception("Failed to broadcast trading message to %s", chat_id)
+
+    async def _send_with_retry(self, chat_id: int, text: str) -> None:
         for attempt in range(_RETRY_AFTER_ATTEMPTS + 1):
             try:
                 await self._bot.send_message(chat_id, text)
@@ -57,7 +67,6 @@ class TelegramBotService:
                     raise
                 logger.warning("Telegram flood control: retry after %ss", exc.retry_after)
                 await asyncio.sleep(exc.retry_after)
-
     async def start_polling(self) -> None:
         self._task = asyncio.create_task(
             self._dp.start_polling(self._bot, handle_signals=False),

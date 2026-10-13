@@ -7,9 +7,14 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from screener.application.metrics import metrics
+from screener.application.trading.service import AccountStatsView, TradingService
 from screener.config import ScreenerSettings
 from screener.infrastructure.telegram.help_text import build_help_messages
-from screener.infrastructure.telegram.keyboards import settings_keyboard
+from screener.infrastructure.telegram.keyboards import (
+    settings_keyboard,
+    trading_keyboard,
+    trading_mainnet_confirm_keyboard,
+)
 from screener.infrastructure.telegram.settings_input import (
     FIELDS,
     RULES,
@@ -23,6 +28,51 @@ if TYPE_CHECKING:
     from screener.app_state import AppState
 
 router = Router()
+
+
+def _money(value: object) -> str:
+    try:
+        return f"${float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "$0.00"
+
+
+def _trading_text(stats: AccountStatsView) -> str:
+    on = "🟢 ON" if stats.trading_enabled else "🔴 OFF"
+    api = "✅ Ready" if stats.trading_ready else f"❌ Not ready ({stats.ready_reason})"
+    pnl = float(stats.unrealised_pnl)
+    pnl_s = f"+{_money(pnl)[1:]}" if pnl >= 0 else f"-{_money(abs(pnl))[1:]}"
+    return (
+        "<b>Bybit Trading</b>\n"
+        f"Mode: {stats.mode.upper()}\n"
+        f"Trading: {on}\n\n"
+        f"Equity: {_money(stats.equity)}\n"
+        f"Wallet: {_money(stats.wallet)}\n"
+        f"Available: {_money(stats.available)}\n"
+        f"Unrealized PnL: {pnl_s}\n\n"
+        f"Open positions: {stats.open_positions}\n"
+        f"Active orders: {stats.active_orders}\n\n"
+        f"API: {api}\n\n"
+        "<i>OFF запрещает только новые входы. Открытые позиции и TP/SL не трогает.</i>"
+    )
+
+
+async def _render_trading(message: Message, state: AppState, *, force: bool = False) -> None:
+    trading = state.trading
+    if trading is None:
+        await message.answer(
+            "Торговый модуль выключен на сервере "
+            "(<code>BYBIT_TRADING_MODE=disabled</code>)."
+        )
+        return
+    stats = await trading.get_account_stats(force=force)
+    await message.answer(
+        _trading_text(stats),
+        reply_markup=trading_keyboard(
+            enabled=stats.trading_enabled,
+            mainnet=trading.settings.bybit_trading_mode == "mainnet",
+        ),
+    )
 
 
 def _rule_line(
@@ -78,10 +128,16 @@ async def cmd_start(message: Message, state: AppState) -> None:
         "Команды:\n"
         "/status — состояние\n"
         "/settings — настройки мониторинга\n"
+        "/trading — автоторговля Bybit\n"
         "/signals — последние сигналы\n"
         "/stats — статистика\n"
         "/help — справка"
     )
+
+
+@router.message(Command("trading"))
+async def cmd_trading(message: Message, state: AppState) -> None:
+    await _render_trading(message, state, force=True)
 
 
 @router.message(Command("help"))
@@ -151,6 +207,84 @@ async def cmd_stats(message: Message, state: AppState) -> None:
         f"Errors: {snap['errors_total']}\n"
         f"WS reconnects: {snap['ws_reconnects']}"
     )
+
+
+async def _edit_trading_panel(
+    query: CallbackQuery, trading: TradingService, *, force: bool = False
+) -> None:
+    stats = await trading.get_account_stats(force=force)
+    if query.message is not None:
+        await query.message.edit_text(
+            _trading_text(stats),
+            reply_markup=trading_keyboard(
+                enabled=stats.trading_enabled,
+                mainnet=trading.settings.bybit_trading_mode == "mainnet",
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("trading:"))
+async def on_trading_action(query: CallbackQuery, state: AppState) -> None:
+    assert query.data is not None and query.from_user is not None
+    trading = state.trading
+    if trading is None:
+        await query.answer("Торговый модуль выключен", show_alert=True)
+        return
+    action = query.data.split(":", 1)[1]
+    chat_id = query.from_user.id
+
+    if action == "refresh":
+        await _edit_trading_panel(query, trading, force=True)
+        await query.answer("Обновлено")
+        return
+
+    if action == "off":
+        await trading.set_enabled(False, chat_id=chat_id)
+        await _edit_trading_panel(query, trading, force=True)
+        await query.answer("Торговля выключена")
+        return
+
+    if action == "on":
+        err = await trading.set_enabled(True, chat_id=chat_id)
+        if err:
+            await query.answer(f"Не удалось: {err}", show_alert=True)
+            return
+        await _edit_trading_panel(query, trading, force=True)
+        await query.answer("Торговля включена")
+        return
+
+    if action == "enable_ask":
+        trading.arm_mainnet_confirm()
+        if query.message is not None:
+            await query.message.answer(
+                "Включить автоматическую торговлю <b>MAINNET</b>?\n"
+                "Будут отправляться реальные ордера.",
+                reply_markup=trading_mainnet_confirm_keyboard(),
+            )
+        await query.answer()
+        return
+
+    if action == "enable_cancel":
+        await query.answer("Отменено")
+        if query.message is not None:
+            await query.message.edit_text("Включение MAINNET отменено.")
+        return
+
+    if action == "enable_confirm":
+        if not trading.mainnet_confirm_armed():
+            await query.answer("Подтверждение истекло. Запросите снова.", show_alert=True)
+            return
+        trading.arm_mainnet_confirm(ttl_sec=60.0)
+        err = await trading.set_enabled(True, chat_id=chat_id)
+        if err:
+            await query.answer(f"Не удалось: {err}", show_alert=True)
+            return
+        if query.message is not None:
+            await query.message.edit_text("MAINNET торговля включена.")
+        await query.answer("Включено")
+        return
+
+    await query.answer("Неизвестное действие", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("toggle:"))

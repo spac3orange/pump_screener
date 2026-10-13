@@ -178,3 +178,122 @@ class SystemSettings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_system_settings() -> SystemSettings:
     return SystemSettings()
+
+
+class TradingSettings(BaseSettings):
+    """Server-side optional auto-trading policy (env only; never Telegram)."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    bybit_trading_mode: str = "disabled"
+    allow_mainnet_trading: bool = False
+    bybit_api_key: str = ""
+    bybit_api_secret: str = ""
+    trading_auto_resume: bool = False
+
+    pump_action: str = "SHORT"
+    drop_action: str = "IGNORE"
+    dump_action: str = "LONG"
+
+    bybit_leverage: float = Field(default=3.0, gt=0)
+    trade_margin_pct: float = Field(default=2.0, gt=0, le=100)
+    order_sizing_price: str = "markPrice"
+    entry_order_type: str = "MARKET"
+    max_open_positions: int = Field(default=1, ge=1)
+    existing_position_policy: str = "skip"
+
+    stop_loss_enabled: bool = True
+    stop_loss_pct: float = Field(default=3.0, gt=0)
+    take_profit_enabled: bool = True
+    take_profit_pct: float = Field(default=5.0, gt=0)
+    tp_trigger_by: str = "MarkPrice"
+    sl_trigger_by: str = "MarkPrice"
+
+    max_signal_age_seconds: float = Field(default=30.0, gt=0)
+    trading_notify_skips: bool = True
+    trading_queue_maxsize: int = Field(default=1000, ge=10)
+    instrument_cache_ttl_sec: float = Field(default=300.0, gt=0)
+    account_stats_cache_ttl_sec: float = Field(default=3.0, gt=0)
+    fill_timeout_sec: float = Field(default=30.0, gt=0)
+
+    @field_validator("bybit_trading_mode", mode="before")
+    @classmethod
+    def _mode(cls, value: object) -> str:
+        text = str(value or "disabled").strip().lower()
+        if text not in {"disabled", "demo", "mainnet"}:
+            raise ValueError("BYBIT_TRADING_MODE must be disabled|demo|mainnet")
+        return text
+
+    @field_validator("pump_action", "drop_action", "dump_action", mode="before")
+    @classmethod
+    def _action(cls, value: object) -> str:
+        text = str(value or "IGNORE").strip().upper()
+        if text not in {"LONG", "SHORT", "IGNORE"}:
+            raise ValueError("trade action must be LONG|SHORT|IGNORE")
+        return text
+
+    @field_validator("order_sizing_price", mode="before")
+    @classmethod
+    def _sizing_price(cls, value: object) -> str:
+        text = str(value or "markPrice").strip()
+        if text not in {"lastPrice", "markPrice"}:
+            raise ValueError("ORDER_SIZING_PRICE must be lastPrice|markPrice")
+        return text
+
+    @field_validator("entry_order_type", mode="before")
+    @classmethod
+    def _entry(cls, value: object) -> str:
+        text = str(value or "MARKET").strip().upper()
+        if text != "MARKET":
+            raise ValueError("ENTRY_ORDER_TYPE must be MARKET in v1")
+        return text
+
+    @field_validator("existing_position_policy", mode="before")
+    @classmethod
+    def _pos_policy(cls, value: object) -> str:
+        text = str(value or "skip").strip().lower()
+        if text != "skip":
+            raise ValueError("EXISTING_POSITION_POLICY must be skip in v1")
+        return text
+
+    @property
+    def enabled_module(self) -> bool:
+        return self.bybit_trading_mode != "disabled"
+
+    @property
+    def is_demo(self) -> bool:
+        return self.bybit_trading_mode == "demo"
+
+    def action_for(self, signal_type: str) -> str:
+        mapping = {
+            "PUMP": self.pump_action,
+            "DROP": self.drop_action,
+            "DUMP": self.dump_action,
+        }
+        return mapping.get(signal_type.upper(), "IGNORE")
+
+    def mainnet_orders_allowed(self) -> bool:
+        return (
+            self.bybit_trading_mode == "mainnet"
+            and self.allow_mainnet_trading
+            and bool(self.bybit_api_key)
+            and bool(self.bybit_api_secret)
+        )
+
+    def orders_environment_ok(self) -> bool:
+        if self.bybit_trading_mode == "disabled":
+            return False
+        if not self.bybit_api_key or not self.bybit_api_secret:
+            return False
+        if self.bybit_trading_mode == "mainnet":
+            return self.allow_mainnet_trading
+        return True
+
+
+@lru_cache(maxsize=1)
+def get_trading_settings() -> TradingSettings:
+    return TradingSettings()

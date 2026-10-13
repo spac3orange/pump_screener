@@ -120,3 +120,49 @@ class SystemEventRow(Base):
         Index("ix_system_events_created_at", "created_at"),
         Index("ix_system_events_component_created", "component", "created_at"),
     )
+
+
+class TradingExecutionRow(Base):
+    __tablename__ = "trading_executions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    signal_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    signal_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    configured_action: Mapped[str] = mapped_column(String(16), nullable=False)
+    side: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    order_link_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    bybit_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filled_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leverage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_trading_executions_symbol_created", "symbol", "created_at"),
+        Index("ix_trading_executions_status_created", "status", "created_at"),
+    )
+
+
+class TradingRuntimeStateRow(Base):
+    __tablename__ = "trading_runtime_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    updated_by_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

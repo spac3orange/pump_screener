@@ -10,7 +10,8 @@ from screener.application.notification_service import NotificationService
 from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
 from screener.application.signal_engine import SignalEngine
-from screener.config import ScreenerSettings, SystemSettings
+from screener.application.trading.service import TradingService
+from screener.config import ScreenerSettings, SystemSettings, TradingSettings
 from screener.domain.models import MarketSignal
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
@@ -30,13 +31,17 @@ class AppState:
     ws_manager: WebSocketManager
     persistence: PersistenceService
     notifications: NotificationService
+    trading: TradingService | None = None
+    trading_settings: TradingSettings | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     pending_edits: dict[int, tuple[str, str]] = field(default_factory=dict)
 
     def dispatch_signal(self, signal: MarketSignal) -> None:
-        """Hand a MarketSignal to persistence and Telegram independently."""
+        """Hand a MarketSignal to persistence, Telegram, and optional trading."""
         self.persistence.enqueue_signal(signal)
         self.notifications.enqueue(signal)
+        if self.trading is not None:
+            self.trading.enqueue(signal)
 
     def begin_setting_edit(self, user_id: int, kind: str, field_name: str) -> None:
         self.pending_edits[user_id] = (kind, field_name)

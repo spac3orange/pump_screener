@@ -3,7 +3,7 @@ FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PYTHONPATH=/app/src
+    PYTHONPATH=/app/src:/app
 
 WORKDIR /app
 
@@ -14,6 +14,7 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY bybit_client ./bybit_client
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY scripts ./scripts

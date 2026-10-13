@@ -17,11 +17,13 @@ from screener.application.notification_service import NotificationService
 from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
 from screener.application.signal_engine import SignalEngine
-from screener.config import SystemSettings, get_system_settings
+from screener.application.trading.service import TradingService
+from screener.config import SystemSettings, get_system_settings, get_trading_settings
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
 from screener.infrastructure.db.repositories import Repository, load_effective_settings
 from screener.infrastructure.db.session import create_engine, create_session_factory
+from screener.infrastructure.db.trading_repo import TradingRepository
 from screener.infrastructure.http.app import create_app
 from screener.infrastructure.telegram.bot import TelegramBotService
 from screener.logging import setup_logging
@@ -36,7 +38,9 @@ def run_migrations(database_url: str) -> None:
     command.upgrade(cfg, "head")
 
 
-async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker, TelegramBotService | None]:
+async def build_runtime(
+    system: SystemSettings,
+) -> tuple[AppState, MarketWorker, TelegramBotService | None]:
     import asyncio
 
     await asyncio.to_thread(run_migrations, system.database_url)
@@ -86,6 +90,16 @@ async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker,
         count_timeout_sec=system.signal_count_db_timeout_sec,
     )
 
+    trading_settings = get_trading_settings()
+    trading: TradingService | None = None
+    if trading_settings.enabled_module:
+        trading = TradingService(trading_settings, TradingRepository(session_factory))
+        logger.info(
+            "Trading module configured mode=%s", trading_settings.bybit_trading_mode
+        )
+    else:
+        logger.info("Trading module disabled (BYBIT_TRADING_MODE=disabled)")
+
     state = AppState(
         system=system,
         repo=repo,
@@ -98,6 +112,8 @@ async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker,
         ws_manager=ws_manager,
         persistence=persistence,
         notifications=notifications,
+        trading=trading,
+        trading_settings=trading_settings,
         extras={"engine": engine},
     )
     correlator.on_signal = state.dispatch_signal
@@ -106,6 +122,8 @@ async def build_runtime(system: SystemSettings) -> tuple[AppState, MarketWorker,
     if system.telegram_bot_token and system.admin_id:
         tg = TelegramBotService(system.telegram_bot_token, state)
         notifications.set_send_func(tg.send_signal)
+        if trading is not None:
+            trading.set_notify(tg.broadcast_text)
         logger.info("Telegram bot enabled for ADMIN_ID=%s", system.admin_id)
     else:
         logger.warning(
@@ -127,6 +145,8 @@ def build_fastapi() -> FastAPI:
 
         await state.persistence.start()
         await state.notifications.start()
+        if state.trading is not None:
+            await state.trading.start()
         await worker.start()
         if tg is not None:
             await tg.start_polling()
@@ -136,6 +156,8 @@ def build_fastapi() -> FastAPI:
         finally:
             logger.info("Screener shutting down")
             await worker.stop()
+            if state.trading is not None:
+                await state.trading.stop()
             await state.notifications.stop()
             if tg is not None:
                 await tg.stop()
