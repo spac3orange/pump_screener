@@ -288,8 +288,54 @@ Signal 24h: 1
 Миграция `002`: значения `signal_type='SHORT'` → `'DROP'`.
 Миграция `004`: таблицы профилей + колонки provenance в `signals` (nullable; старые сигналы без профиля).
 Seed `Default` делает приложение (`ProfileService.bootstrap`), детерминированно из прежних настроек.
+Миграция `005`: lifecycle-колонки в `trading_executions` (все nullable, старые строки не ломаются;
+`opened_at` для уже исполненных = `created_at`).
 
 Тики **не** пишутся в БД — только память.
+
+### 8.1 Жизненный цикл позиции (закрытие сделки → Telegram)
+
+`OPEN → monitor → size == 0 → classify → persist → ровно одно уведомление`.
+
+```
+Bybit private WS (order / execution / position)   bybit_client/private_ws.py
+        ↓  PrivateMessageRouter                    infrastructure/bybit/lifecycle_adapter.py
+        ├─ fill hints → BybitGateway.wait_for_fill (вход не изменён)
+        ↓
+PositionLifecycleService                           application/trading/lifecycle.py
+        ↓ classify_close                           application/trading/close_classifier.py
+TradingRepository (LifecycleStore)                 infrastructure/db/trading_repo.py
+        ↓ TradeClosedEvent
+TelegramBotService.notify_trade_closed             telegram/trade_lifecycle_format.py
+```
+
+- Один private WS на процесс (auth HMAC, `ping` 20с, stale 60с → reconnect, backoff+jitter,
+  resubscribe). pybit WS в gateway выключен (`start_pybit_ws=False`), его fill-hints кормит router.
+- Закрыта = подтверждённый `size == 0` (WS, затем повторно REST `position/list`); REST `size > 0`
+  отменяет финализацию. Partial reduction → только `remaining_qty`.
+- Причина — только из полей execution закрывающего ордера (последнего по времени):
+  `stopOrderType`/`createType` TakeProfit/StopLoss (или сохранённый `tp_order_id`/`sl_order_id`),
+  `CreateByClosing` → MANUAL (кнопка Close в Bybit), `CreateByUser` → EXTERNAL_ORDER,
+  `BustTrade`/`CreateByLiq` → LIQUIDATION, `AdlTrade` → ADL (расширение). Противоречие/нет данных →
+  UNKNOWN. Cancelled/Deactivated TP/SL не является доказательством. Цена не используется.
+- Числа: realized = Σ`execPnl` (WS; REST execution/list его не отдаёт), fees = execFee входа +
+  закрытия, funding = Σ `execType=Funding` за жизнь сделки, net = realized − fees − funding.
+  Если чего-то нет — поле `NULL` и строка в сообщении не выводится. `closed-pnl` Bybit — сверка /
+  fallback (`Net PnL (Bybit)`), только если есть записи по **всем** закрывающим ордерам.
+- Порядок событий: окно корреляции (`LIFECYCLE_CORRELATION_WINDOW_SEC`) после `size=0`, сразу —
+  если закрывающих executions хватает на весь qty; ограниченный повтор REST при отставании истории.
+- Exactly-once: `finalize_close` = `UPDATE … WHERE status <> 'CLOSED'`; уведомление —
+  claim `close_notified_at IS NULL`; при ошибке отправки claim снимается и reconcile повторяет.
+- Restart: OPEN/CLOSING/FILLED строки → REST позиции → закрытые финализируются (`recovered`),
+  уведомление один раз, старше 6ч — только запись. Reconcile каждые `LIFECYCLE_RECONCILE_INTERVAL_SEC`
+  и после каждого reconnect WS. WS down > 120с → critical alert в Telegram.
+- Работает при Trading OFF (OFF запрещает только новые входы). Нужны ключи и
+  `orders_environment_ok()`; `TRADING_NOTIFY_CLOSES=false` — запись без сообщения.
+- Ограничения: MANUAL распознаётся только для кнопки Close (`CreateByClosing`); рыночный
+  reduce-only ордер из UI/API → EXTERNAL_ORDER. Balance after close — equity сразу после закрытия
+  (при восстановлении после рестарта не показывается). Funding за последние 7 дней окна REST.
+
+Smoke (только DEMO): `scripts/demo_lifecycle_smoke.py --runs tp sl external`.
 
 ---
 
@@ -378,7 +424,11 @@ docker logs pumpscreener-app-1
 - golden-фикстура сигналов (`tests/unit/test_signal_golden.py`, в т.ч. короткий спайк с пересечением порога внутри секунды);
 - профили: CRUD, миграция before == after, атомарная активация, no-hybrid при конкурентной смене,
   provenance сигнала (`tests/unit/test_profiles.py`);
-- реальный PostgreSQL (opt-in): `TEST_DATABASE_URL=...screener_test pytest tests/integration/test_profiles_db.py`.
+- реальный PostgreSQL (opt-in): `TEST_DATABASE_URL=...screener_test pytest tests/integration/test_profiles_db.py`;
+- закрытие позиций: TP/SL/cancelled-legs/partial/manual/external/unknown/liquidation, дубликаты WS,
+  порядок событий, restart recovery, Trading OFF, повтор доставки (`tests/unit/test_trade_lifecycle.py`,
+  `test_close_classifier.py`, `test_trade_lifecycle_format.py`, `test_private_stream.py`,
+  `tests/integration/test_trade_lifecycle_db.py`).
 
 Запуск: `pytest -q` (pythonpath `src`). Перф: `docs/PERFORMANCE.md`.
 
@@ -408,6 +458,8 @@ docker logs pumpscreener-app-1
 | Независимая доставка | `persistence_service.py` / `notification_service.py` |
 | Текст `/help` | `telegram/help_text.py` |
 | Миграции схемы | `alembic/versions/` |
+| Причина закрытия сделки | `application/trading/close_classifier.py` |
+| Формат сообщения о закрытии | `telegram/trade_lifecycle_format.py` |
 
 ---
 

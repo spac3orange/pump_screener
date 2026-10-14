@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -12,9 +13,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -233,6 +236,30 @@ class TradingExecutionRow(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    # Position lifecycle (migration 005). Money values come from Bybit executions as-is.
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    remaining_qty: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    tp_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sl_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    close_reason_detail: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    exit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    closed_qty: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    trading_fee: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    funding_fee: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    net_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    bybit_closed_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    balance_after: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    close_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    close_execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    close_recovered: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    close_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     __table_args__ = (

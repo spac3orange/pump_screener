@@ -12,6 +12,7 @@ from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
 from screener.application.profiles import ActiveProfile, ProfileService
 from screener.application.signal_engine import SignalEngine
+from screener.application.trading.lifecycle import PositionLifecycleService
 from screener.application.trading.service import TradingService
 from screener.config import ScreenerSettings, SystemSettings, TradingSettings
 from screener.domain.models import MarketSignal
@@ -39,6 +40,7 @@ class AppState:
     trading: TradingService | None = None
     trading_settings: TradingSettings | None = None
     profiles: ProfileService | None = None
+    lifecycle: PositionLifecycleService | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     # user_id -> (kind, field); one pending text prompt per admin, so bounded by ADMIN_ID.
     pending_edits: dict[int, tuple[str, str]] = field(default_factory=dict)

@@ -103,6 +103,11 @@ class TradingService:
         self._instrument_cache: dict[str, tuple[float, ResolvedInstrument]] = {}
         self._stats_cache: tuple[float, AccountStatsView] | None = None
         self._mainnet_confirm_until: float = 0.0
+        self._position_listener: Callable[[str], None] | None = None
+
+    @property
+    def gateway(self) -> BybitGateway | None:
+        return self._gateway
 
     @property
     def enabled(self) -> bool:
@@ -136,6 +141,10 @@ class TradingService:
 
     def set_notify(self, notify: NotifyFunc | None) -> None:
         self._notify = notify
+
+    def set_position_listener(self, listener: Callable[[str], None] | None) -> None:
+        """Called with the symbol right after an entry fill is persisted."""
+        self._position_listener = listener
 
     def enqueue(self, signal: MarketSignal) -> None:
         if not self.settings.enabled_module:
@@ -727,6 +736,11 @@ class TradingService:
             return
 
         metrics.orders_filled_total += 1
+        if self._position_listener is not None:
+            try:
+                self._position_listener(signal.symbol)
+            except Exception:
+                logger.warning("Position listener failed", exc_info=True)
         tp_pct = (
             Decimal(str(self.settings.take_profit_pct))
             if self.settings.take_profit_enabled

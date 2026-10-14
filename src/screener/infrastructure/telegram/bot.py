@@ -11,9 +11,11 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramRetryAfter
 
 from screener.domain.models import MarketSignal
+from screener.domain.trade_lifecycle import TradeClosedEvent
 from screener.infrastructure.telegram.formatter import format_signal_message
 from screener.infrastructure.telegram.handlers import router
 from screener.infrastructure.telegram.middleware import AdminAccessMiddleware, AppStateMiddleware
+from screener.infrastructure.telegram.trade_lifecycle_format import format_trade_closed
 
 if TYPE_CHECKING:
     from screener.app_state import AppState
@@ -57,6 +59,20 @@ class TelegramBotService:
                 await self._send_with_retry(chat_id, text)
             except Exception:
                 logger.exception("Failed to broadcast trading message to %s", chat_id)
+
+    async def deliver_text(self, text: str) -> bool:
+        """Like ``broadcast_text`` but reports whether at least one admin got it."""
+        delivered = False
+        for chat_id in self._app_state.system.admin_id:
+            try:
+                await self._send_with_retry(chat_id, text)
+                delivered = True
+            except Exception:
+                logger.exception("Failed to deliver trading message to %s", chat_id)
+        return delivered
+
+    async def notify_trade_closed(self, event: TradeClosedEvent) -> bool:
+        return await self.deliver_text(format_trade_closed(event))
 
     async def _send_with_retry(self, chat_id: int, text: str) -> None:
         for attempt in range(_RETRY_AFTER_ATTEMPTS + 1):

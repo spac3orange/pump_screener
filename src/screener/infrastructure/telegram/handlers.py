@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from screener.application.metrics import metrics
 from screener.application.profiles import ProfileService
+from screener.application.trading.lifecycle import PositionLifecycleService
 from screener.application.trading.service import AccountStatsView, TradingService
 from screener.config import ScreenerSettings
 from screener.domain.profiles import ProfileError, ProfileNameTaken, normalize_profile_name
@@ -35,6 +36,7 @@ from screener.infrastructure.telegram.settings_input import (
     prompt_for,
     toggle_rule,
 )
+from screener.infrastructure.telegram.trade_lifecycle_format import format_money
 
 if TYPE_CHECKING:
     from screener.app_state import AppState
@@ -49,7 +51,43 @@ def _money(value: object) -> str:
         return "$0.00"
 
 
-def _trading_text(stats: AccountStatsView) -> str:
+_REASON_SHORT = {
+    "TAKE_PROFIT": "TP",
+    "STOP_LOSS": "SL",
+    "MANUAL": "MANUAL",
+    "EXTERNAL_ORDER": "EXTERNAL",
+    "LIQUIDATION": "LIQUIDATION",
+    "ADL": "ADL",
+    "UNKNOWN": "UNKNOWN",
+}
+
+
+def _lifecycle_text(lifecycle: PositionLifecycleService | None) -> str:
+    if lifecycle is None:
+        return "Lifecycle monitor: ❌ Off\n"
+    status = lifecycle.status()
+    if not status.running:
+        monitor = "❌ Not running"
+    elif status.stream_connected:
+        monitor = "✅ Connected"
+    else:
+        monitor = "⚠️ WS reconnecting (REST fallback)"
+    text = f"Lifecycle monitor: {monitor}\n"
+    last = status.last_closed
+    if last is not None:
+        pnl = last.net_pnl if last.net_pnl is not None else last.bybit_closed_pnl
+        text += (
+            "\nПоследняя закрытая сделка:\n"
+            f"{html.escape(last.symbol)} {last.direction}\n"
+            f"{_REASON_SHORT.get(last.close_reason.value, last.close_reason.value)}\n"
+            f"{format_money(pnl) if pnl is not None else '—'}\n"
+        )
+    return text
+
+
+def _trading_text(
+    stats: AccountStatsView, lifecycle: PositionLifecycleService | None = None
+) -> str:
     on = "🟢 ON" if stats.trading_enabled else "🔴 OFF"
     if not stats.trading_enabled and stats.disabled_reason:
         on += f"\nПричина OFF: {html.escape(stats.disabled_reason)}"
@@ -76,6 +114,7 @@ def _trading_text(stats: AccountStatsView) -> str:
         f"Open positions: {stats.open_positions}\n"
         f"Active orders: {stats.active_orders}\n\n"
         f"API: {api}\n"
+        f"{_lifecycle_text(lifecycle)}"
         f"{started}\n"
         "<i>OFF запрещает только новые входы. Открытые позиции и TP/SL не трогает.</i>"
     )
@@ -91,7 +130,7 @@ async def _render_trading(message: Message, state: AppState, *, force: bool = Fa
         return
     stats = await trading.get_account_stats(force=force)
     await message.answer(
-        _trading_text(stats),
+        _trading_text(stats, state.lifecycle),
         reply_markup=trading_keyboard(
             enabled=stats.trading_enabled,
             mainnet=trading.settings.bybit_trading_mode == "mainnet",
@@ -258,12 +297,16 @@ async def cmd_stats(message: Message, state: AppState) -> None:
 
 
 async def _edit_trading_panel(
-    query: CallbackQuery, trading: TradingService, *, force: bool = False
+    query: CallbackQuery,
+    trading: TradingService,
+    *,
+    force: bool = False,
+    lifecycle: PositionLifecycleService | None = None,
 ) -> None:
     stats = await trading.get_account_stats(force=force)
     if query.message is not None:
         await query.message.edit_text(
-            _trading_text(stats),
+            _trading_text(stats, lifecycle),
             reply_markup=trading_keyboard(
                 enabled=stats.trading_enabled,
                 mainnet=trading.settings.bybit_trading_mode == "mainnet",
@@ -282,13 +325,13 @@ async def on_trading_action(query: CallbackQuery, state: AppState) -> None:
     chat_id = query.from_user.id
 
     if action == "refresh":
-        await _edit_trading_panel(query, trading, force=True)
+        await _edit_trading_panel(query, trading, force=True, lifecycle=state.lifecycle)
         await query.answer("Обновлено")
         return
 
     if action == "off":
         await trading.set_enabled(False, chat_id=chat_id)
-        await _edit_trading_panel(query, trading, force=True)
+        await _edit_trading_panel(query, trading, force=True, lifecycle=state.lifecycle)
         await query.answer("Торговля выключена")
         return
 
@@ -297,7 +340,7 @@ async def on_trading_action(query: CallbackQuery, state: AppState) -> None:
         if err:
             await query.answer(f"Не удалось: {err}", show_alert=True)
             return
-        await _edit_trading_panel(query, trading, force=True)
+        await _edit_trading_panel(query, trading, force=True, lifecycle=state.lifecycle)
         await query.answer("Торговля включена")
         return
 

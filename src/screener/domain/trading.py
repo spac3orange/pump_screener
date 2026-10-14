@@ -39,3 +39,19 @@ class ExecutionStatus(StrEnum):
     FAILED = "FAILED"
     PROTECTIVE_FAILED = "PROTECTIVE_FAILED"
     RECONCILING = "RECONCILING"
+    # Position lifecycle (after the entry is filled).
+    OPEN = "OPEN"
+    CLOSING = "CLOSING"
+    CLOSED = "CLOSED"
+
+
+# Entry filled => a position may exist on Bybit and must be monitored until size == 0.
+TRACKED_STATUSES = frozenset(
+    {
+        ExecutionStatus.PARTIALLY_FILLED,
+        ExecutionStatus.FILLED,
+        ExecutionStatus.PROTECTIVE_FAILED,
+        ExecutionStatus.OPEN,
+        ExecutionStatus.CLOSING,
+    }
+)

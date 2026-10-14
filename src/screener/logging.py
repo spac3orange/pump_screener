@@ -27,6 +27,10 @@ _CONTEXT_KEYS = (
     "status",
     "duration_ms",
     "count",
+    "trade_id",
+    "order_id",
+    "order_link_id",
+    "close_reason",
     "extra",
 )
 

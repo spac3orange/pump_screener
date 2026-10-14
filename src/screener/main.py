@@ -9,6 +9,7 @@ from alembic.config import Config
 from fastapi import FastAPI
 
 from alembic import command
+from bybit_client import BybitGateway, create_bybit_http
 from screener.app_state import AppState
 from screener.application.correlator import SignalCorrelator
 from screener.application.instrument_registry import InstrumentRegistry
@@ -20,6 +21,7 @@ from screener.application.profiles import ProfileService
 from screener.application.signal_engine import SignalEngine
 from screener.application.trading.service import TradingService
 from screener.config import SystemSettings, get_system_settings, get_trading_settings
+from screener.infrastructure.bybit.lifecycle_runtime import TradeLifecycleRuntime
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
 from screener.infrastructure.db.profile_repo import ProfileRepository
@@ -98,10 +100,31 @@ async def build_runtime(
 
     trading_settings = get_trading_settings()
     trading: TradingService | None = None
+    lifecycle: TradeLifecycleRuntime | None = None
     if trading_settings.enabled_module:
-        trading = TradingService(trading_settings, TradingRepository(session_factory))
+        trading_repo = TradingRepository(session_factory)
+        gateway: BybitGateway | None = None
+        if trading_settings.orders_environment_ok():
+            # One private WS (ours) feeds both entry fill hints and the lifecycle monitor.
+            gateway = BybitGateway(
+                create_bybit_http(
+                    api_key=trading_settings.bybit_api_key,
+                    api_secret=trading_settings.bybit_api_secret,
+                    demo=trading_settings.is_demo,
+                ),
+                demo=trading_settings.is_demo,
+                api_key=trading_settings.bybit_api_key,
+                api_secret=trading_settings.bybit_api_secret,
+                start_pybit_ws=False,
+            )
+            lifecycle = TradeLifecycleRuntime(trading_settings, gateway, trading_repo)
+        trading = TradingService(trading_settings, trading_repo, gateway=gateway)
+        if lifecycle is not None:
+            trading.set_position_listener(lifecycle.service.notice_trade_opened)
         logger.info(
-            "Trading module configured mode=%s", trading_settings.bybit_trading_mode
+            "Trading module configured mode=%s lifecycle=%s",
+            trading_settings.bybit_trading_mode,
+            "on" if lifecycle is not None else "off",
         )
     else:
         logger.info("Trading module disabled (BYBIT_TRADING_MODE=disabled)")
@@ -121,7 +144,8 @@ async def build_runtime(
         trading=trading,
         trading_settings=trading_settings,
         profiles=profiles,
-        extras={"engine": engine},
+        lifecycle=lifecycle.service if lifecycle is not None else None,
+        extras={"engine": engine, "lifecycle_runtime": lifecycle},
     )
     profiles.set_apply(state.apply_profile)
     state.apply_profile(active_profile, False)
@@ -133,6 +157,8 @@ async def build_runtime(
         notifications.set_send_func(tg.send_signal)
         if trading is not None:
             trading.set_notify(tg.broadcast_text)
+        if lifecycle is not None:
+            lifecycle.service.set_notify(tg.notify_trade_closed, tg.broadcast_text)
         logger.info("Telegram bot enabled for ADMIN_ID=%s", system.admin_id)
     else:
         logger.warning(
@@ -156,6 +182,9 @@ def build_fastapi() -> FastAPI:
         await state.notifications.start()
         if state.trading is not None:
             await state.trading.start()
+        lifecycle_runtime = state.extras.get("lifecycle_runtime")
+        if lifecycle_runtime is not None:
+            await lifecycle_runtime.start()
         await worker.start()
         if tg is not None:
             await tg.start_polling()
@@ -179,6 +208,8 @@ def build_fastapi() -> FastAPI:
                 event="shutdown",
             )
             await worker.stop()
+            if lifecycle_runtime is not None:
+                await lifecycle_runtime.stop()
             if state.trading is not None:
                 await state.trading.stop()
             await state.notifications.stop()

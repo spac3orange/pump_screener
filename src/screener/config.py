@@ -248,6 +248,12 @@ class TradingSettings(BaseSettings):
     account_stats_cache_ttl_sec: float = Field(default=3.0, gt=0)
     fill_timeout_sec: float = Field(default=30.0, gt=0)
 
+    # Position lifecycle: close detection + Telegram close notifications.
+    trading_notify_closes: bool = True
+    lifecycle_reconcile_interval_sec: float = Field(default=45.0, ge=10, le=600)
+    lifecycle_correlation_window_sec: float = Field(default=3.0, ge=0.5, le=30)
+    lifecycle_pnl_wait_sec: float = Field(default=3.0, ge=0, le=30)
+
     @field_validator("bybit_trading_mode", mode="before")
     @classmethod
     def _mode(cls, value: object) -> str:

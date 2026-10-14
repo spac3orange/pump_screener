@@ -5,6 +5,9 @@
 - Monitor crypto USDT Linear Perpetual only (no TradFi, no PreLaunch, no expiry futures).
 - Trading is **optional** (`BYBIT_TRADING_MODE=disabled|demo|mainnet`); screener works without private keys.
 - Auto-trading consumes final `MarketSignal` only (never Telegram→order); Telegram `/trading` is ON/OFF + stats.
+- Position close notifications: `PositionLifecycleService` (private WS + REST reconcile); close only on
+ confirmed `size == 0`, reason only from execution fields (never price), UNKNOWN when unsure;
+ exactly-once via `trading_executions.close_notified_at`. Runs even when Trading is OFF.
 - Market ticks stay in memory; PostgreSQL stores signals, settings, notifications, system events.
 - Prefer extending `SignalEngine` condition handlers over rewriting the pipeline.
 - Detection rules live in monitoring profiles (PostgreSQL, immutable versions) via `ProfileService`;

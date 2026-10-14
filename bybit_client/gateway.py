@@ -49,6 +49,7 @@ class BybitGateway:
         settle_coin: str = "USDT",
         api_key: str | None = None,
         api_secret: str | None = None,
+        start_pybit_ws: bool = True,
     ) -> None:
         self._http = session
         self._category = category
@@ -56,6 +57,8 @@ class BybitGateway:
         self._demo = demo
         self._api_key = api_key
         self._api_secret = api_secret
+        # False when an external private stream feeds ``handle_private_message``.
+        self._start_pybit_ws = start_pybit_ws
         self._ws: WebSocket | None = None
         self._fill_events: dict[str, asyncio.Event] = {}
         self._fill_payloads: dict[str, dict[str, Any]] = {}
@@ -64,7 +67,7 @@ class BybitGateway:
     async def start(self) -> None:
         """Start private WS for order/execution topics (best-effort)."""
         self._loop = asyncio.get_running_loop()
-        if not self._api_key or not self._api_secret:
+        if not self._api_key or not self._api_secret or not self._start_pybit_ws:
             return
 
         def _boot() -> WebSocket:
@@ -98,6 +101,14 @@ class BybitGateway:
 
     async def close(self) -> None:
         self._ws = None
+
+    def handle_private_message(self, message: dict[str, Any]) -> None:
+        """Fill hints from an external private stream (same handling as the pybit WS)."""
+        topic = str(message.get("topic") or "")
+        if topic.startswith("order"):
+            self._handle_ws_order(message)
+        elif topic.startswith("execution"):
+            self._handle_ws_execution(message)
 
     def _handle_ws_order(self, message: dict[str, Any]) -> None:
         data = message.get("data") or []
@@ -301,6 +312,58 @@ class BybitGateway:
 
     async def count_open_orders(self) -> int:
         return len(await self.list_open_orders())
+
+    async def _paged(self, fn: Any, *, max_pages: int = 10, **kwargs: Any) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        cursor = ""
+        for _ in range(max_pages):
+            if cursor:
+                kwargs["cursor"] = cursor
+            result = (await self._call(fn, **kwargs)).get("result") or {}
+            rows.extend(result.get("list") or [])
+            cursor = str(result.get("nextPageCursor") or "")
+            if not cursor:
+                break
+        return rows
+
+    async def get_executions(
+        self,
+        *,
+        symbol: str,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        order_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Raw ``/v5/execution/list`` rows (trades and funding) for one symbol."""
+        kwargs: dict[str, Any] = {"category": self._category, "symbol": symbol, "limit": 100}
+        if order_id:
+            kwargs["orderId"] = order_id
+        else:
+            if start_ms is not None:
+                kwargs["startTime"] = start_ms
+            if end_ms is not None:
+                kwargs["endTime"] = end_ms
+        return await self._paged(self._http.get_executions, **kwargs)
+
+    async def get_closed_pnl(
+        self, *, symbol: str, start_ms: int | None = None, end_ms: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Raw ``/v5/position/closed-pnl`` rows for one symbol."""
+        kwargs: dict[str, Any] = {"category": self._category, "symbol": symbol, "limit": 100}
+        if start_ms is not None:
+            kwargs["startTime"] = start_ms
+        if end_ms is not None:
+            kwargs["endTime"] = end_ms
+        return await self._paged(self._http.get_closed_pnl, max_pages=2, **kwargs)
+
+    async def list_position_rows(self) -> list[dict[str, Any]]:
+        """Raw ``/v5/position/list`` rows for the settle coin (includes size=0 rows)."""
+        return await self._paged(
+            self._http.get_positions,
+            category=self._category,
+            settleCoin=self._settle_coin,
+            limit=200,
+        )
 
     async def assert_one_way_mode(self) -> None:
         """Fail closed if any position row uses hedge positionIdx (1 or 2)."""

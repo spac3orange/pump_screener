@@ -68,6 +68,14 @@ class Metrics:
     open_positions: int = 0
     active_orders: int = 0
     last_private_api_success_ts: float | None = None
+    # Position lifecycle (counts only: never balance or PnL).
+    trade_closures_total: dict[str, int] = field(default_factory=dict)
+    close_notifications_sent_total: int = 0
+    close_notifications_failed_total: int = 0
+    private_ws_connected: bool = False
+    private_ws_reconnects_total: int = 0
+    position_reconciliations_total: int = 0
+    lifecycle_reconciliation_errors_total: int = 0
     rates: dict[str, float] = field(default_factory=dict)
     _latency: array = field(default_factory=lambda: array("d", [0.0] * _LATENCY_SAMPLES))
     _latency_n: int = 0
@@ -122,6 +130,7 @@ class Metrics:
             for k, v in vars(self).items()
             if not k.startswith("_") and k not in {"rates"}
         }
+        counters["trade_closures_total"] = dict(self.trade_closures_total)
         return {
             **counters,
             "lost_price_events": self.lost_price_events,
