@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 TRADFI_SYMBOL_TYPES = frozenset({"stock", "ETF", "commodity", "forex"})
 MAX_RULE_INTERVAL_SEC = 3600
+# Bump when ScreenerSettings fields change; stored profile versions carry it.
+MONITORING_CONFIG_SCHEMA_VERSION = 1
 
 
 class ScreenerSettings(BaseModel):
-    """User-tunable screener rules (env defaults + DB overlay)."""
+    """Complete monitoring configuration; one snapshot per monitoring profile version."""
 
     enable_long: bool = True
     long_threshold_pct: float = Field(default=40.0, gt=0)
@@ -53,13 +55,35 @@ class ScreenerSettings(BaseModel):
             return {str(s).strip().upper() for s in value if str(s).strip()}
         raise TypeError("exclude_symbols must be a comma-separated string or collection")
 
-    def rule_version(self) -> str:
-        # Stable short fingerprint for signal provenance.
+    def canonical_config(self) -> dict[str, Any]:
+        """Complete JSON-safe snapshot with a deterministic field/value order."""
+        data = self.model_dump(mode="json")
+        data["exclude_symbols"] = sorted(self.exclude_symbols)
+        return data
+
+    def config_hash(self) -> str:
         import hashlib
         import json
 
-        raw = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(raw.encode()).hexdigest()[:12]
+        raw = json.dumps(self.canonical_config(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def rule_version(self) -> str:
+        # Stable short fingerprint for signal provenance.
+        return self.config_hash()[:12]
+
+    @classmethod
+    def from_profile_config(cls, config: dict[str, Any], schema_version: int) -> ScreenerSettings:
+        """Validate a stored profile snapshot; profiles are complete, never overlays."""
+        if schema_version != MONITORING_CONFIG_SCHEMA_VERSION:
+            raise ValueError(f"unsupported monitoring config schema v{schema_version}")
+        missing = set(cls.model_fields) - set(config)
+        if missing:
+            raise ValueError(f"incomplete profile config, missing: {', '.join(sorted(missing))}")
+        unknown = set(config) - set(cls.model_fields)
+        if unknown:
+            raise ValueError(f"unknown profile config fields: {', '.join(sorted(unknown))}")
+        return cls.model_validate(config)
 
 
 class SystemSettings(BaseSettings):
@@ -88,6 +112,10 @@ class SystemSettings(BaseSettings):
     market_queue_maxsize: int = Field(default=10_000, ge=100)
     ws_args_char_budget: int = Field(default=20_000, ge=1000)
     ws_ping_interval_sec: float = Field(default=10.0, ge=5)
+    # permessage-deflate: "deflate" (library default) or "none".
+    ws_compression: Literal["deflate", "none"] = "deflate"
+    # Frames buffered per shard before the reader stops reading the socket (no drop).
+    ws_max_queue: int = Field(default=1024, ge=16, le=4096)
     ws_ack_timeout_sec: float = Field(default=10.0, ge=1)
     kline_warmup_concurrency: int = Field(default=8, ge=1, le=20)
     kline_warmup_limit: int = Field(default=62, ge=10, le=1000)

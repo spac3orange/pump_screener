@@ -70,8 +70,12 @@ class WebSocketManager:
         ping_interval_sec: float = 10.0,
         stale_connection_sec: float = 30.0,
         ack_timeout_sec: float = 10.0,
+        compression: str | None = "deflate",
+        max_queue: int = 1024,
     ) -> None:
         self._ws_url = ws_url
+        self._compression = compression
+        self._max_queue = max_queue
         self.on_message = on_message
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
@@ -278,7 +282,8 @@ class WebSocketManager:
                     self._ws_url,
                     ping_interval=None,
                     close_timeout=5,
-                    max_queue=1024,
+                    max_queue=self._max_queue,
+                    compression=self._compression,
                 ) as ws:
                     state.ws = ws
                     state.connected = True

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import os
+import socket
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -28,10 +31,13 @@ from screener.config import TradingSettings
 from screener.domain.models import MarketSignal
 from screener.domain.trading import ExecutionStatus, TradeAction
 from screener.infrastructure.db.trading_repo import TradingRepository
+from screener.logging import log
 
 logger = logging.getLogger(__name__)
 
 NotifyFunc = Callable[[str], Awaitable[None]]
+
+_INSTRUMENT_CACHE_MAX = 256
 
 
 @dataclass(slots=True)
@@ -47,6 +53,23 @@ class AccountStatsView:
     trading_ready: bool
     ready_reason: str
     fetched_at: float
+    disabled_reason: str = ""
+    started_at: datetime | None = None
+    instance: str = ""
+
+
+_DISABLED_REASON_TEXT = {
+    "not_started": "модуль ещё не запущен",
+    "startup_default": "по умолчанию после запуска сервиса (TRADING_AUTO_RESUME=false)",
+    "restart_no_auto_resume": (
+        "сервис был перезапущен, а TRADING_AUTO_RESUME=false — "
+        "торговля не восстанавливается автоматически"
+    ),
+    "state_load_failed": "не удалось прочитать сохранённое состояние из БД",
+    "persisted_off": "сохранённое состояние: OFF",
+    "telegram_off": "выключено кнопкой в Telegram",
+    "queue_overflow": "переполнение очереди торговых сигналов",
+}
 
 
 class TradingService:
@@ -69,7 +92,12 @@ class TradingService:
         )
         self._lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
+        self._background: set[asyncio.Task] = set()
         self._enabled = False
+        self._disabled_reason = "not_started"
+        self._disabled_at: datetime | None = None
+        self._started_at: datetime | None = None
+        self._instance = f"{socket.gethostname()}:{os.getpid()}"
         self._ready = False
         self._ready_reason = "not_started"
         self._instrument_cache: dict[str, tuple[float, ResolvedInstrument]] = {}
@@ -88,6 +116,24 @@ class TradingService:
     def ready_reason(self) -> str:
         return self._ready_reason
 
+    @property
+    def disabled_reason(self) -> str:
+        return "" if self._enabled else self._disabled_reason
+
+    def describe_disabled_reason(self) -> str:
+        if self._enabled:
+            return ""
+        text = _DISABLED_REASON_TEXT.get(self._disabled_reason, self._disabled_reason)
+        if self._disabled_at is not None:
+            text += f" ({self._disabled_at:%Y-%m-%d %H:%M:%S} UTC)"
+        return text
+
+    def _disable(self, reason: str) -> None:
+        self._enabled = False
+        self._disabled_reason = reason
+        self._disabled_at = datetime.now(UTC)
+        metrics.trading_enabled = False
+
     def set_notify(self, notify: NotifyFunc | None) -> None:
         self._notify = notify
 
@@ -96,13 +142,40 @@ class TradingService:
             return
         metrics.trade_signals_received_total += 1
         if self._queue.full():
-            logger.critical("Trading queue overflow; disabling new entries")
-            self._enabled = False
+            log(
+                logger,
+                logging.CRITICAL,
+                "Trading queue overflow; disabling new entries",
+                component="trading",
+                event="queue_overflow",
+                symbol=signal.symbol,
+                signal_id=str(signal.id),
+            )
+            already_off = not self._enabled and self._disabled_reason == "queue_overflow"
+            self._disable("queue_overflow")
             self._ready = False
             self._ready_reason = "queue_overflow"
-            metrics.trading_enabled = False
             metrics.trading_ready = False
+            if not already_off:
+                task = asyncio.get_running_loop().create_task(
+                    self._notify_text(
+                        "🚨 Торговля выключена: переполнение очереди сигналов.\n"
+                        "Новые входы запрещены до перезапуска сервиса."
+                    )
+                )
+                self._background.add(task)
+                task.add_done_callback(self._background.discard)
             return
+        log(
+            logger,
+            logging.DEBUG,
+            f"Trading enqueue {signal.symbol} qsize={self._queue.qsize() + 1}",
+            component="trading",
+            event="enqueue",
+            symbol=signal.symbol,
+            signal_id=str(signal.id),
+            signal_type=signal.signal_type.value,
+        )
         self._queue.put_nowait(signal)
 
     async def start(self) -> None:
@@ -141,27 +214,60 @@ class TradingService:
             logger.exception("Trading preflight failed")
             metrics.record_error()
 
-        if self.settings.trading_auto_resume:
-            try:
-                self._enabled = await self._repo.get_runtime_enabled()
-            except Exception:
-                logger.warning("Could not load trading runtime state", exc_info=True)
-                self._enabled = False
-        else:
-            self._enabled = False
+        self._started_at = datetime.now(UTC)
+        persisted: bool | None
+        try:
+            persisted = await self._repo.get_runtime_enabled()
+        except Exception:
+            logger.warning("Could not load trading runtime state", exc_info=True)
+            persisted = None
 
-        metrics.trading_enabled = self._enabled
+        if persisted is None:
+            self._disable("state_load_failed")
+        elif not self.settings.trading_auto_resume:
+            self._disable("restart_no_auto_resume" if persisted else "startup_default")
+        elif persisted:
+            self._enabled = True
+            metrics.trading_enabled = True
+        else:
+            self._disable("persisted_off")
+
         metrics.trading_ready = self._ready
         self._tasks.append(supervise("trading-worker", self._loop))
-        logger.info(
-            "Trading module started mode=%s ready=%s enabled=%s",
-            self.settings.bybit_trading_mode,
-            self._ready,
-            self._enabled,
+        log(
+            logger,
+            logging.WARNING if persisted and not self._enabled else logging.INFO,
+            f"Trading module started mode={self.settings.bybit_trading_mode} "
+            f"ready={self._ready} enabled={self._enabled} persisted={persisted} "
+            f"auto_resume={self.settings.trading_auto_resume} "
+            f"disabled_reason={self.disabled_reason or '-'} instance={self._instance}",
+            component="trading",
+            event="started",
+            status="on" if self._enabled else "off",
+            reason=self.disabled_reason or None,
         )
+        await self._notify_text(self._startup_notice(persisted))
+
+    def _startup_notice(self, persisted: bool | None) -> str:
+        lines = [
+            "🔄 Торговый модуль запущен",
+            f"Mode: {self.settings.bybit_trading_mode.upper()}",
+            f"Ready: {'yes' if self._ready else f'no ({html.escape(self._ready_reason)})'}",
+            f"Trading: {'ON' if self._enabled else 'OFF'}",
+        ]
+        if not self._enabled:
+            lines.append(f"Причина: {self.describe_disabled_reason()}")
+            if persisted and not self.settings.trading_auto_resume:
+                lines.append(
+                    "⚠️ До перезапуска торговля была включена. "
+                    "Включите снова через /trading или задайте TRADING_AUTO_RESUME=true."
+                )
+        lines.append(f"Instance: {self._instance}")
+        return "\n".join(lines)
 
     async def stop(self) -> None:
         await cancel_tasks(self._tasks)
+        await cancel_tasks(list(self._background))
         if self._gateway is not None:
             await self._gateway.close()
 
@@ -185,12 +291,30 @@ class TradingService:
                     return "mainnet_confirm_required"
             if not self.settings.orders_environment_ok():
                 return "environment_blocked"
-        self._enabled = enabled
-        metrics.trading_enabled = enabled
+        if enabled:
+            self._enabled = True
+            metrics.trading_enabled = True
+        else:
+            self._disable("telegram_off")
+        log(
+            logger,
+            logging.INFO,
+            f"Trading enabled={enabled} by chat_id={chat_id}",
+            component="trading",
+            event="enabled_changed",
+            status="on" if enabled else "off",
+        )
         try:
             await self._repo.set_runtime_enabled(enabled, chat_id=chat_id)
         except Exception:
-            logger.warning("Failed to persist trading runtime state", exc_info=True)
+            log(
+                logger,
+                logging.WARNING,
+                "Failed to persist trading runtime state",
+                component="trading",
+                event="runtime_persist_failed",
+                exc_info=True,
+            )
         return None
 
     def arm_mainnet_confirm(self, ttl_sec: float = 60.0) -> None:
@@ -225,6 +349,9 @@ class TradingService:
                 trading_ready=self._ready,
                 ready_reason=self._ready_reason,
                 fetched_at=time.monotonic(),
+                disabled_reason=self.describe_disabled_reason(),
+                started_at=self._started_at,
+                instance=self._instance,
             )
         bal = await self._gateway.get_balance()
         positions = await self._gateway.list_open_positions()
@@ -244,6 +371,9 @@ class TradingService:
             trading_ready=self._ready,
             ready_reason=self._ready_reason,
             fetched_at=time.monotonic(),
+            disabled_reason=self.describe_disabled_reason(),
+            started_at=self._started_at,
+            instance=self._instance,
         )
 
     async def _loop(self) -> None:
@@ -260,8 +390,31 @@ class TradingService:
 
     async def _handle(self, signal: MarketSignal) -> None:
         action = TradeAction(self.settings.action_for(signal.signal_type.value))
+        log(
+            logger,
+            logging.INFO,
+            f"Trading handle {signal.symbol} type={signal.signal_type.value} "
+            f"action={action.value} enabled={self._enabled} ready={self._ready}",
+            component="trading",
+            event="handle_start",
+            symbol=signal.symbol,
+            signal_id=str(signal.id),
+            signal_type=signal.signal_type.value,
+            action=action.value,
+        )
         if action is TradeAction.IGNORE:
             metrics.trade_signals_ignored_total += 1
+            log(
+                logger,
+                logging.INFO,
+                f"Trading ignore {signal.symbol} (action=IGNORE)",
+                component="trading",
+                event="ignored",
+                symbol=signal.symbol,
+                signal_id=str(signal.id),
+                signal_type=signal.signal_type.value,
+                action=action.value,
+            )
             return
 
         if not self._enabled:
@@ -293,7 +446,15 @@ class TradingService:
                 order_link_id=order_link_id,
             )
             if not reserved:
-                logger.info("Duplicate trading signal %s skipped", signal.id)
+                log(
+                    logger,
+                    logging.WARNING,
+                    f"Duplicate trading signal skipped id={signal.id}",
+                    component="trading",
+                    event="duplicate_signal",
+                    symbol=signal.symbol,
+                    signal_id=str(signal.id),
+                )
                 return
 
             assert self._gateway is not None
@@ -307,6 +468,17 @@ class TradingService:
                     error_message=str(exc)[:500],
                 )
                 metrics.orders_failed_total += 1
+                log(
+                    logger,
+                    logging.ERROR,
+                    f"Trading execution failed {signal.symbol}: {type(exc).__name__}",
+                    component="trading",
+                    event="execution_failed",
+                    symbol=signal.symbol,
+                    signal_id=str(signal.id),
+                    reason=type(exc).__name__,
+                    exc_info=True,
+                )
                 await self._notify_text(
                     f"❌ Ошибка исполнения\n{signal.symbol}\n{type(exc).__name__}"
                 )
@@ -321,6 +493,24 @@ class TradingService:
         reserve: bool,
     ) -> None:
         metrics.trade_signals_skipped_total += 1
+        detail = ""
+        if reason == "disabled":
+            detail = self.describe_disabled_reason()
+        elif reason == "not_ready":
+            detail = self._ready_reason
+        log(
+            logger,
+            logging.INFO,
+            f"Trading skip {signal.symbol} reason={reason} action={action.value}"
+            + (f" detail={detail}" if detail else ""),
+            component="trading",
+            event="skipped",
+            symbol=signal.symbol,
+            signal_id=str(signal.id),
+            signal_type=signal.signal_type.value,
+            action=action.value,
+            reason=reason,
+        )
         if reserve:
             side = (
                 OrderSide.BUY.value
@@ -348,6 +538,7 @@ class TradingService:
             await self._notify_text(
                 f"⏭ Сделка пропущена\n{signal.symbol}\nSignal: {signal.signal_type.value}\n"
                 f"Action: {action.value}\nReason: {reason}"
+                + (f"\nПочему: {html.escape(detail)}" if detail else "")
             )
 
     async def _instrument(self, symbol: str) -> ResolvedInstrument:
@@ -359,7 +550,10 @@ class TradingService:
         inst = await self._gateway.get_instrument(symbol)
         if inst is None:
             raise BybitApiError(-1, "instrument_not_found")
+        self._instrument_cache.pop(symbol, None)
         self._instrument_cache[symbol] = (now, inst)
+        while len(self._instrument_cache) > _INSTRUMENT_CACHE_MAX:
+            self._instrument_cache.pop(next(iter(self._instrument_cache)))
         return inst
 
     async def _execute(

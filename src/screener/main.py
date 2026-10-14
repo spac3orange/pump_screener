@@ -16,17 +16,19 @@ from screener.application.market_processor import MarketDataProcessor
 from screener.application.notification_service import NotificationService
 from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
+from screener.application.profiles import ProfileService
 from screener.application.signal_engine import SignalEngine
 from screener.application.trading.service import TradingService
 from screener.config import SystemSettings, get_system_settings, get_trading_settings
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
+from screener.infrastructure.db.profile_repo import ProfileRepository
 from screener.infrastructure.db.repositories import Repository, load_effective_settings
 from screener.infrastructure.db.session import create_engine, create_session_factory
 from screener.infrastructure.db.trading_repo import TradingRepository
 from screener.infrastructure.http.app import create_app
 from screener.infrastructure.telegram.bot import TelegramBotService
-from screener.logging import setup_logging
+from screener.logging import log, setup_logging
 from screener.workers.market_worker import MarketWorker
 
 logger = logging.getLogger(__name__)
@@ -50,7 +52,9 @@ async def build_runtime(
     repo = Repository(session_factory)
 
     defaults = system.to_screener_settings()
-    screener_settings = await load_effective_settings(repo, defaults)
+    profiles = ProfileService(ProfileRepository(session_factory), event_log=repo.log_event)
+    active_profile = await profiles.bootstrap(lambda: load_effective_settings(repo, defaults))
+    screener_settings = active_profile.settings
 
     rest = BybitRestClient(system.bybit_rest_base)
     history = PriceHistoryManager()
@@ -73,6 +77,8 @@ async def build_runtime(
         ping_interval_sec=system.ws_ping_interval_sec,
         stale_connection_sec=float(system.stale_connection_sec),
         ack_timeout_sec=system.ws_ack_timeout_sec,
+        compression=None if system.ws_compression == "none" else "deflate",
+        max_queue=system.ws_max_queue,
     )
 
     registry = InstrumentRegistry(
@@ -114,8 +120,11 @@ async def build_runtime(
         notifications=notifications,
         trading=trading,
         trading_settings=trading_settings,
+        profiles=profiles,
         extras={"engine": engine},
     )
+    profiles.set_apply(state.apply_profile)
+    state.apply_profile(active_profile, False)
     correlator.on_signal = state.dispatch_signal
 
     tg: TelegramBotService | None = None
@@ -150,11 +159,25 @@ def build_fastapi() -> FastAPI:
         await worker.start()
         if tg is not None:
             await tg.start_polling()
-        logger.info("Screener started")
+        log(
+            logger,
+            logging.INFO,
+            f"Screener started log_level={system.log_level} "
+            f"trading_mode="
+            f"{state.trading_settings.bybit_trading_mode if state.trading_settings else 'n/a'}",
+            component="main",
+            event="started",
+        )
         try:
             yield
         finally:
-            logger.info("Screener shutting down")
+            log(
+                logger,
+                logging.INFO,
+                "Screener shutting down",
+                component="main",
+                event="shutdown",
+            )
             await worker.stop()
             if state.trading is not None:
                 await state.trading.stop()

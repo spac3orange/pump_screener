@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -75,7 +76,10 @@ class TelegramBotService:
 
     async def stop(self) -> None:
         if self._task:
-            await self._dp.stop_polling()
+            # Raises "Polling is not started" if polling died (e.g. Telegram unreachable);
+            # shutdown must still reach the persistence flush.
+            with contextlib.suppress(RuntimeError):
+                await self._dp.stop_polling()
             self._task.cancel()
             try:
                 await self._task

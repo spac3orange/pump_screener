@@ -77,7 +77,8 @@ docs/ARCHITECT_CONTEXT.md # этот файл
 2. `build_runtime()`:
    - Alembic `upgrade head` (в thread);
    - engine/session/repo;
-   - `load_effective_settings(repo, env_defaults)` — env как дефолт, overlay из `screener_settings` id=1;
+   - `ProfileService.bootstrap()` — активный мониторинг-профиль из PostgreSQL; при первом запуске
+     прежние настройки (`env` + legacy `screener_settings` id=1) один раз переносятся в системный `Default`;
    - создаёт history, processor, engine, correlator, WS, registry, persistence, notifications;
    - Telegram, если заданы `TELEGRAM_BOT_TOKEN` и `ADMIN_ID`.
 3. Start order: persistence → notifications → `MarketWorker.start()` → TG polling.
@@ -229,18 +230,37 @@ Signal 24h: 1
 ### 7.1 Два слоя
 
 1. **SystemSettings** — только env (DB, Bybit URLs, WS, TG token, ADMIN_ID, concurrency…).
-2. **ScreenerSettings** — правила скринера:
-   - дефолты из env при старте;
-   - runtime overlay в PostgreSQL `screener_settings` (row `id=1`, колонка `config` JSONB);
-   - изменение через Telegram `/settings` → `AppState.apply_settings` → engine + correlator + registry exclude + DB save.
+2. **ScreenerSettings** — правила скринера, хранятся в **мониторинг-профилях** (PostgreSQL — источник истины):
+   - профиль = полный снимок `ScreenerSettings.canonical_config()` (не overlay), версии неизменяемые;
+   - `config_schema_version` + `config_hash` (sha256 канонического JSON; `rule_version` = первые 12 символов);
+   - env-значения `SCREENER_*`/правил используются только для первичного seed `Default`;
+   - в профиле **только detection-настройки**: никаких trading-параметров, токенов, ключей, DB URL.
 
-Источник истины для правил в рантайме: **`state.signal_engine.settings`**.
+Источник истины для правил в рантайме: **`state.signal_engine.settings`** (иммутабельный
+`_EngineConfig`, подменяется одной ссылкой). Активный профиль: `state.profiles.active`.
+
+### 7.1.1 ProfileService (`application/profiles/service.py`)
+
+- Любая мутация: валидация → запись в БД → только потом синхронный `AppState.apply_profile`
+  (engine + correlator window + registry exclude). Ошибка валидации/БД — старый профиль остаётся.
+- `activate`: сбрасывает config-зависимый dedup; PriceHistory, WS, registry **не** трогаются;
+  пишет `system_events.monitoring_profile_changed`.
+- `/settings` → `update_active_settings` → новая версия активного профиля (тот же hash — no-op).
+- Нельзя удалить активный и системный `Default`; удаление мягкое (`deleted_at`), версии остаются
+  для provenance сигналов; имя после удаления снова свободно. Имена уникальны без учёта регистра.
+- Каждый сигнал получает `SignalContext` в момент evaluate: `monitoring_profile_id`,
+  `monitoring_profile_version_id`, `rule_version`. Correlator не смешивает matches разных контекстов
+  в одном сигнале → событие видит старый или новый конфиг, никогда гибрид.
 
 ### 7.2 Telegram UI настроек
 
 - Кнопки ON/OFF: Лонг / Шорт / Дамп.
 - Шесть кнопок period/pct → ответ числом в чат.
 - Интервалы: целые минуты 1…60 (`*_interval_sec` кратно 60, ≤ 3600).
+- Сверху «Активный профиль: X»; изменения сохраняются новой версией активного профиля.
+- `/profiles`: список → карточка профиля → Активировать / Копия / Переименовать / Удалить,
+  «Создать из текущих», «Настройки». Если автоторговля ON, активация требует подтверждения
+  (торговля при этом не выключается).
 
 ### 7.3 `/help`
 
@@ -257,12 +277,17 @@ Signal 24h: 1
 | Таблица | Назначение |
 |--------|------------|
 | `instruments` | снимок universe |
-| `signals` | сигналы + JSONB `payload` (в т.ч. matches) |
-| `screener_settings` | JSON config id=1 |
+| `signals` | сигналы + JSONB `payload` (в т.ч. matches, `monitoring_profile`) + `monitoring_profile_id`, `monitoring_profile_version_id` |
+| `monitoring_profiles` | имя, описание, `is_system`, `current_version_id`, `deleted_at` |
+| `monitoring_profile_versions` | неизменяемые `config` JSONB + `config_schema_version` + `config_hash` |
+| `monitoring_runtime_state` | одна строка (`id=1`): `active_profile_id` |
+| `screener_settings` | **deprecated**: читается один раз для seed `Default` |
 | `notification_history` | delivery status per chat |
 | `system_events` | operational events |
 
 Миграция `002`: значения `signal_type='SHORT'` → `'DROP'`.
+Миграция `004`: таблицы профилей + колонки provenance в `signals` (nullable; старые сигналы без профиля).
+Seed `Default` делает приложение (`ProfileService.bootstrap`), детерминированно из прежних настроек.
 
 Тики **не** пишутся в БД — только память.
 
@@ -298,7 +323,8 @@ Ready loop обновляет `metrics.ready` раз в секунду.
 | Engine evals | ~все msgs (~600/s) | только live lastPrice (~50/s) |
 | Lookup 30m | ~43 µs | ~1.5–2 µs |
 
-Скрипты: `scripts/bench_history.py`, `scripts/measure_pipeline.py`.
+Скрипты: `scripts/bench_history.py`, `scripts/measure_pipeline.py`,
+`scripts/benchmark_performance.py`, `scripts/soak_synthetic.py` (подробно — `docs/PERFORMANCE.md`).
 
 ---
 
@@ -308,9 +334,10 @@ Ready loop обновляет `metrics.ready` раз в секунду.
 |---------|------------|
 | `/start` | краткое описание |
 | `/help` | 3 сообщения: правила, чтение алерта, ограничения |
-| `/status` | ready, instruments, WS, msg/s, live price/s, drops, lost, reconnects, gaps, p95 |
-| `/settings` | текущие правила + клавиатура |
-| `/signals` | последние 10 из БД |
+| `/status` | Monitoring profile, ready, instruments, WS, msg/s, live price/s, drops, lost, reconnects, gaps, p95 |
+| `/settings` | правила активного профиля + клавиатура |
+| `/profiles` | мониторинг-профили: активация, создание, копия, переименование, удаление |
+| `/signals` | последние 10 из БД (с профилем и версией) |
 | `/stats` | counts из БД + runtime |
 
 ---
@@ -331,7 +358,7 @@ docker logs pumpscreener-app-1
 - `/status`: `Ready: True`, `WS connections` ≈ ceil(instruments/100), Msg/s ~ сотни.
 
 Новые env-ключи (после hardening):  
-`WS_PING_INTERVAL_SEC`, `STALE_CONNECTION_SEC`, `WS_ACK_TIMEOUT_SEC`, `KLINE_WARMUP_CONCURRENCY`, `GAP_BACKFILL_MIN_SEC`, `ALLOW_MIXED_HISTORY`, `SIGNAL_CORRELATION_MS`.  
+`WS_PING_INTERVAL_SEC`, `STALE_CONNECTION_SEC`, `WS_ACK_TIMEOUT_SEC`, `KLINE_WARMUP_CONCURRENCY`, `GAP_BACKFILL_MIN_SEC`, `ALLOW_MIXED_HISTORY`, `SIGNAL_CORRELATION_MS`, `WS_COMPRESSION` (`deflate`|`none`), `WS_MAX_QUEUE`.  
 Удалённые (volume spike и т.п.) игнорируются (`extra="ignore"`).
 
 ---
@@ -347,9 +374,13 @@ docker logs pumpscreener-app-1
 - snapshot/enrichment не вызывают evaluate;
 - notification при «зависшей» DB всё равно уходит;
 - dynamic WS subscribe + start-after-update_symbols;
-- `/help` динамические settings / disabled rule / HTML escape / длина < 4096.
+- `/help` динамические settings / disabled rule / HTML escape / длина < 4096;
+- golden-фикстура сигналов (`tests/unit/test_signal_golden.py`, в т.ч. короткий спайк с пересечением порога внутри секунды);
+- профили: CRUD, миграция before == after, атомарная активация, no-hybrid при конкурентной смене,
+  provenance сигнала (`tests/unit/test_profiles.py`);
+- реальный PostgreSQL (opt-in): `TEST_DATABASE_URL=...screener_test pytest tests/integration/test_profiles_db.py`.
 
-Запуск: `pytest -q` (pythonpath `src`).
+Запуск: `pytest -q` (pythonpath `src`). Перф: `docs/PERFORMANCE.md`.
 
 ---
 

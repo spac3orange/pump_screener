@@ -23,7 +23,9 @@ def run(symbols: int, events: int) -> None:
     names = [f"S{i}USDT" for i in range(symbols)]
     start = time.perf_counter()
     for name in names:
-        history.backfill_klines(name, [(T0 // 1000, 1.0)], lo_sec=T0 // 1000, hi_sec=T0 // 1000 + 3700)
+        history.backfill_klines(
+            name, [(T0 // 1000, 1.0)], lo_sec=T0 // 1000, hi_sec=T0 // 1000 + 3700
+        )
     fill = time.perf_counter() - start
 
     engine = SignalEngine(history, ScreenerSettings(min_turnover_24h_usdt=0))

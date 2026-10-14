@@ -7,4 +7,7 @@
 - Auto-trading consumes final `MarketSignal` only (never Telegram→order); Telegram `/trading` is ON/OFF + stats.
 - Market ticks stay in memory; PostgreSQL stores signals, settings, notifications, system events.
 - Prefer extending `SignalEngine` condition handlers over rewriting the pipeline.
+- Detection rules live in monitoring profiles (PostgreSQL, immutable versions) via `ProfileService`;
+  a profile holds detection settings only — never trading settings or secrets. `.env` only seeds `Default`.
+- Never coalesce/drop live lastPrice events for speed; `tests/unit/test_signal_golden.py` guards behavior.
 - Telegram access is gated by `ADMIN_ID` (env). Non-admins are rejected by `AdminAccessMiddleware`.

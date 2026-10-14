@@ -60,6 +60,15 @@ class SignalRow(Base):
     rule_version: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # NULL for signals created before monitoring profiles existed.
+    monitoring_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    monitoring_profile_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("monitoring_profile_versions.id"),
+        nullable=True,
+    )
 
     notifications: Mapped[list[NotificationRow]] = relationship(back_populates="signal")
 
@@ -67,10 +76,85 @@ class SignalRow(Base):
         Index("ix_signals_detected_at", "detected_at"),
         Index("ix_signals_symbol_type_detected", "symbol", "signal_type", "detected_at"),
         Index("ix_signals_type_detected", "signal_type", "detected_at"),
+        Index("ix_signals_profile_version", "monitoring_profile_version_id"),
     )
 
 
+class MonitoringProfileRow(Base):
+    __tablename__ = "monitoring_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "monitoring_profile_versions.id",
+            use_alter=True,
+            name="fk_monitoring_profiles_current_version",
+        ),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    # Soft delete keeps versions referenced by historical signals.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+Index(
+    "uq_monitoring_profiles_name_ci",
+    func.lower(MonitoringProfileRow.name),
+    unique=True,
+    postgresql_where=MonitoringProfileRow.deleted_at.is_(None),
+)
+
+
+class MonitoringProfileVersionRow(Base):
+    """Immutable config snapshot; every save of a profile appends one row."""
+
+    __tablename__ = "monitoring_profile_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("monitoring_profiles.id"), nullable=False
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    config_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_by_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        Index("uq_monitoring_profile_versions_no", "profile_id", "version_no", unique=True),
+    )
+
+
+class MonitoringRuntimeStateRow(Base):
+    """Single row (id=1): exactly one active monitoring profile."""
+
+    __tablename__ = "monitoring_runtime_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    active_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("monitoring_profiles.id"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    updated_by_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class ScreenerSettingsRow(Base):
+    """Deprecated: pre-profile single config row, read once to seed ``Default``."""
+
     __tablename__ = "screener_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)

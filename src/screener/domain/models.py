@@ -148,6 +148,17 @@ class RuleMatch:
 
 
 @dataclass(slots=True, frozen=True)
+class SignalContext:
+    """Monitoring configuration that produced a match; frozen at evaluation time."""
+
+    rule_version: str
+    profile_id: UUID | None = None
+    profile_version_id: UUID | None = None
+    profile_name: str | None = None
+    profile_version_no: int | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class MarketSignal:
     """One user-facing market event: all correlated rule matches of a move."""
 
@@ -163,6 +174,10 @@ class MarketSignal:
     exchange: str = "bybit"
     category: str = "linear"
     id: UUID = field(default_factory=uuid4)
+    monitoring_profile_id: UUID | None = None
+    monitoring_profile_version_id: UUID | None = None
+    monitoring_profile_name: str | None = None
+    monitoring_profile_version_no: int | None = None
 
     @property
     def signal_type(self) -> SignalType:
@@ -215,4 +230,15 @@ class MarketSignal:
             "history_quality": self.history_quality.value,
             "level": self.level,
             "matches": [m.to_payload() for m in self.matches],
+            "monitoring_profile": {
+                "id": _opt_str(self.monitoring_profile_id),
+                "version_id": _opt_str(self.monitoring_profile_version_id),
+                "version_no": self.monitoring_profile_version_no,
+                "name": self.monitoring_profile_name,
+                "config_hash": self.rule_version,
+            },
         }
+
+
+def _opt_str(value: UUID | None) -> str | None:
+    return None if value is None else str(value)

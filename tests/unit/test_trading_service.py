@@ -380,3 +380,67 @@ async def test_dispatch_enqueues_without_blocking() -> None:
     if state.trading is not None:
         state.trading.enqueue(sig)
     assert svc._queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_trade_keeps_trading_enabled() -> None:
+    gw = FakeGateway()
+    svc = TradingService(_settings(), FakeRepo(), gateway=gw)  # type: ignore[arg-type]
+    svc._ready = True
+    svc._enabled = True
+    await svc._handle(_signal(SignalType.DUMP, symbol="AAAUSDT"))
+    assert svc.enabled is True
+    await svc._handle(_signal(SignalType.DUMP, symbol="BBBUSDT"))
+    assert gw.place_calls == 2
+    assert svc.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_restart_without_auto_resume_reports_reason() -> None:
+    gw = FakeGateway()
+    repo = FakeRepo()
+    repo.enabled = True
+    notes: list[str] = []
+
+    async def notify(text: str) -> None:
+        notes.append(text)
+
+    svc = TradingService(
+        _settings(trading_auto_resume=False), repo, notify=notify, gateway=gw  # type: ignore[arg-type]
+    )
+    await svc.start()
+    try:
+        assert svc.enabled is False
+        assert svc.disabled_reason == "restart_no_auto_resume"
+        assert any("Торговый модуль запущен" in n and "TRADING_AUTO_RESUME" in n for n in notes)
+        await svc._handle(_signal(SignalType.DUMP))
+        skip = notes[-1]
+        assert "Reason: disabled" in skip and "перезапущен" in skip
+        assert gw.place_calls == 0
+    finally:
+        await svc.stop()
+
+
+@pytest.mark.asyncio
+async def test_restart_with_auto_resume_restores_on() -> None:
+    repo = FakeRepo()
+    repo.enabled = True
+    svc = TradingService(
+        _settings(trading_auto_resume=True), repo, gateway=FakeGateway()  # type: ignore[arg-type]
+    )
+    await svc.start()
+    try:
+        assert svc.enabled is True
+        assert svc.disabled_reason == ""
+    finally:
+        await svc.stop()
+
+
+@pytest.mark.asyncio
+async def test_telegram_off_reason() -> None:
+    svc = TradingService(_settings(), FakeRepo(), gateway=FakeGateway())  # type: ignore[arg-type]
+    svc._ready = True
+    assert await svc.set_enabled(True, chat_id=1) is None
+    await svc.set_enabled(False, chat_id=1)
+    assert svc.disabled_reason == "telegram_off"
+    assert "кнопкой" in svc.describe_disabled_reason()

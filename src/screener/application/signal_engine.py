@@ -9,12 +9,12 @@ from screener.application.metrics import metrics
 from screener.application.price_history import PriceHistoryManager, WindowLookup
 from screener.config import ScreenerSettings
 from screener.domain.enums import Direction, HistoryQuality, PriceEventKind, SignalType
-from screener.domain.models import PriceEvent, RuleMatch
+from screener.domain.models import PriceEvent, RuleMatch, SignalContext
 from screener.domain.rules import DIRECTION_OF
 
 logger = logging.getLogger(__name__)
 
-MatchHandler = Callable[[PriceEvent, list[RuleMatch]], None]
+MatchHandler = Callable[[PriceEvent, list[RuleMatch], SignalContext], None]
 
 
 @dataclass(slots=True, frozen=True)
@@ -23,6 +23,14 @@ class _Rule:
     threshold_pct: float
     interval_sec: int
     direction: Direction
+
+
+@dataclass(slots=True, frozen=True)
+class _EngineConfig:
+    settings: ScreenerSettings
+    rules: tuple[_Rule, ...]
+    windows: tuple[int, ...]
+    context: SignalContext
 
 
 def _rules_from(settings: ScreenerSettings) -> tuple[_Rule, ...]:
@@ -61,28 +69,50 @@ class SignalEngine:
 
     @property
     def settings(self) -> ScreenerSettings:
-        return self._settings
+        return self._cfg.settings
 
     @property
     def rule_version(self) -> str:
-        return self._rule_version
+        return self._cfg.context.rule_version
 
-    def update_settings(self, settings: ScreenerSettings) -> None:
-        self._settings = settings
-        self._rules = _rules_from(settings)
-        self._windows = tuple(sorted({rule.interval_sec for rule in self._rules}))
-        self._rule_version = settings.rule_version()
+    @property
+    def context(self) -> SignalContext:
+        return self._cfg.context
+
+    @property
+    def dedup(self) -> SignalDeduplicator:
+        return self._dedup
+
+    def update_settings(
+        self,
+        settings: ScreenerSettings,
+        *,
+        context: SignalContext | None = None,
+        reset_dedup: bool = False,
+    ) -> None:
+        """Swap in a new immutable config; an event never sees a half-applied one."""
+        rules = _rules_from(settings)
+        cfg = _EngineConfig(
+            settings=settings,
+            rules=rules,
+            windows=tuple(sorted({rule.interval_sec for rule in rules})),
+            context=context or SignalContext(rule_version=settings.rule_version()),
+        )
+        if reset_dedup:
+            self._dedup.clear()
         self._dedup.configure(
             cooldown_sec=settings.cooldown_sec,
             escalate_step_pct=settings.escalate_step_pct,
             reset_ratio=settings.reset_ratio,
             reset_hold_sec=settings.reset_hold_sec,
         )
+        self._cfg = cfg
 
     def evaluate(self, event: PriceEvent) -> list[RuleMatch]:
-        if event.kind is not PriceEventKind.LIVE or not self._rules:
+        cfg = self._cfg
+        if event.kind is not PriceEventKind.LIVE or not cfg.rules:
             return []
-        settings = self._settings
+        settings = cfg.settings
         if event.symbol in settings.exclude_symbols:
             return []
         metrics.engine_evaluations_total += 1
@@ -90,7 +120,7 @@ class SignalEngine:
         now_ms = event.exchange_ts_ms
         price = event.last_price
         lookups: dict[int, tuple[WindowLookup, float] | None] = {}
-        for window in self._windows:
+        for window in cfg.windows:
             lookup = self._history.lookup(event.symbol, now_ms=now_ms, interval_sec=window)
             if lookup is None or lookup.price <= 0:
                 lookups[window] = None
@@ -102,7 +132,7 @@ class SignalEngine:
 
         turnover_ok = event.turnover_24h >= settings.min_turnover_24h_usdt
         matches: list[RuleMatch] = []
-        for rule in self._rules:
+        for rule in cfg.rules:
             entry = lookups[rule.interval_sec]
             if entry is None:
                 continue
@@ -137,5 +167,5 @@ class SignalEngine:
         if matches:
             metrics.rule_matches_total += len(matches)
             if self.on_matches is not None:
-                self.on_matches(event, matches)
+                self.on_matches(event, matches, cfg.context)
         return matches

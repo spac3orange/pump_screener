@@ -65,7 +65,10 @@ pytest -q
 
 ## Telegram commands
 
-`/start` `/status` `/settings` `/signals` `/stats` `/help`
+`/start` `/status` `/settings` `/profiles` `/signals` `/stats` `/trading` `/help`
+
+Detection rules live in named, versioned **monitoring profiles** stored in PostgreSQL
+(`/profiles`). `.env` screener values only seed the system `Default` profile on first start.
 
 Only Telegram user IDs listed in `ADMIN_ID` are accepted.
 

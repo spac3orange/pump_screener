@@ -70,5 +70,6 @@ def settings_keyboard(settings: ScreenerSettings) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🔻 Период дамп", callback_data="set:dump:period"),
             InlineKeyboardButton(text="➗ Процент дамп", callback_data="set:dump:pct"),
         ],
+        [InlineKeyboardButton(text="📁 Профили", callback_data="prof:list")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)

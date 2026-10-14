@@ -73,6 +73,8 @@ class Repository:
                 rule_version=signal.rule_version,
                 payload=signal.to_payload(),
                 detected_at=signal.detected_at,
+                monitoring_profile_id=signal.monitoring_profile_id,
+                monitoring_profile_version_id=signal.monitoring_profile_version_id,
             )
             session.add(row)
 
@@ -118,26 +120,6 @@ class Repository:
             row = await session.get(ScreenerSettingsRow, 1)
             return None if row is None else dict(row.config)
 
-    async def save_screener_settings(
-        self, config: dict[str, Any], *, chat_id: int | None = None
-    ) -> None:
-        async with session_scope(self._sf) as session:
-            stmt = insert(ScreenerSettingsRow).values(
-                id=1,
-                config=config,
-                updated_by_chat_id=chat_id,
-                updated_at=datetime.now(UTC),
-            )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[ScreenerSettingsRow.id],
-                set_={
-                    "config": config,
-                    "updated_by_chat_id": chat_id,
-                    "updated_at": datetime.now(UTC),
-                },
-            )
-            await session.execute(stmt)
-
     async def count_symbol_signals_24h(
         self, symbol: str, *, now: datetime, exclude_id: UUID | None = None
     ) -> int:
@@ -160,12 +142,11 @@ class Repository:
 
     async def signal_stats(self) -> dict[str, Any]:
         async with session_scope(self._sf) as session:
-            result = await session.execute(select(SignalRow.signal_type, SignalRow.id))
-            rows = result.all()
-            counts: dict[str, int] = {}
-            for signal_type, _ in rows:
-                counts[signal_type] = counts.get(signal_type, 0) + 1
-            return {"total": len(rows), "by_type": counts}
+            result = await session.execute(
+                select(SignalRow.signal_type, func.count()).group_by(SignalRow.signal_type)
+            )
+            counts = {signal_type: int(n) for signal_type, n in result.all()}
+            return {"total": sum(counts.values()), "by_type": counts}
 
 
 def _has_rule_profile(stored: dict[str, Any]) -> bool:
@@ -175,14 +156,13 @@ def _has_rule_profile(stored: dict[str, Any]) -> bool:
 async def load_effective_settings(
     repo: Repository, defaults: ScreenerSettings
 ) -> ScreenerSettings:
+    """Pre-profile effective config (env defaults + legacy row); seeds ``Default`` once."""
     stored = await repo.load_screener_settings()
     if not stored or not _has_rule_profile(stored):
         data = defaults.model_dump(mode="json")
         if stored and "exclude_symbols" in stored:
             data["exclude_symbols"] = stored["exclude_symbols"]
-        settings = ScreenerSettings.model_validate(data)
-        await repo.save_screener_settings(settings.model_dump(mode="json"))
-        return settings
+        return ScreenerSettings.model_validate(data)
     merged = defaults.model_dump(mode="json")
     merged.update(stored)
     return ScreenerSettings.model_validate(merged)

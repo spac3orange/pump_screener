@@ -81,7 +81,8 @@ class SignalDeduplicator:
         if not triggered:
             if current is None:
                 return DedupDecision(False, 0, "idle")
-            # Reset when magnitude falls below reset threshold (or sign flip handled by caller via triggered=False).
+            # Reset when magnitude falls below reset threshold
+            # (or sign flip handled by caller via triggered=False).
             if abs_change < reset_threshold:
                 if current.below_since_ms is None:
                     current.below_since_ms = now_ms
@@ -117,3 +118,16 @@ class SignalDeduplicator:
 
     def state_of(self, key: DedupKey) -> DedupState:
         return DedupState.ACTIVE if key.as_tuple() in self._state else DedupState.IDLE
+
+    @property
+    def active_count(self) -> int:
+        return len(self._state)
+
+    def clear(self) -> None:
+        self._state.clear()
+
+    def clear_symbol(self, symbol: str) -> int:
+        stale = [k for k in self._state if k[0] == symbol]
+        for k in stale:
+            del self._state[k]
+        return len(stale)

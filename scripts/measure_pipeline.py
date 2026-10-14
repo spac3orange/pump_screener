@@ -53,7 +53,11 @@ def rss_mb() -> float:
         pmc.cb = ctypes.sizeof(PMC)
         k32 = ctypes.windll.kernel32
         k32.GetCurrentProcess.restype = wintypes.HANDLE
-        k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+        k32.K32GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(PMC),
+            wintypes.DWORD,
+        ]
         k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
         return pmc.WorkingSetSize / 1024 / 1024
     with open("/proc/self/status") as fh:
@@ -63,7 +67,7 @@ def rss_mb() -> float:
     return 0.0
 
 
-async def main(duration: float, profile: bool) -> None:
+async def main(duration: float, profile: bool, compression: str, max_queue: int) -> None:
     rest = BybitRestClient("https://api.bybit.com")
     raw = await rest.fetch_linear_instruments()
     symbols = sorted(r["symbol"] for r in raw if is_crypto_usdt_linear_perpetual(r))
@@ -90,6 +94,8 @@ async def main(duration: float, profile: bool) -> None:
         on_message=worker.on_ws_message,
         on_connect=processor.on_resubscribe,
         on_disconnect=lambda syms, ts: history.mark_disconnected(syms, at_ts_ms=ts),
+        compression=None if compression == "none" else "deflate",
+        max_queue=max_queue,
     )
     process_task = asyncio.create_task(worker._process_loop())
     monitor_task = asyncio.create_task(worker._loop_monitor())
@@ -129,7 +135,10 @@ async def main(duration: float, profile: bool) -> None:
     def rate(key: str, attr: str) -> float:
         return round((getattr(metrics, attr) - start_counts[key]) / elapsed, 1)
 
-    print(f"symbols={len(symbols)} seconds={elapsed:.1f} profiler={'on' if profile else 'off'}")
+    print(
+        f"symbols={len(symbols)} seconds={elapsed:.1f} profiler={'on' if profile else 'off'} "
+        f"compression={compression} max_queue={max_queue}"
+    )
     print(f"cpu_pct={cpu / elapsed * 100:.1f}")
     print(f"rss_mb_total={rss_mb():.1f} rss_mb_before_history={rss_base:.1f}")
     print(f"ws_frames_per_sec={rate('frames', 'ws_frames_total')}")
@@ -162,5 +171,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration", type=float, default=60.0)
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--compression", choices=["deflate", "none"], default="deflate")
+    parser.add_argument("--max-queue", type=int, default=1024)
     args = parser.parse_args()
-    asyncio.run(main(args.duration, args.profile))
+    asyncio.run(main(args.duration, args.profile, args.compression, args.max_queue))

@@ -10,6 +10,7 @@ from screener.application.metrics import metrics
 from screener.application.supervisor import cancel_tasks, supervise
 from screener.domain.enums import PriceEventKind
 from screener.domain.models import Instrument, PriceEvent
+from screener.logging import log
 
 if TYPE_CHECKING:
     from screener.app_state import AppState
@@ -50,11 +51,27 @@ class MarketWorker:
         metrics.price_queue_size = self._queue.qsize()
 
     def on_ws_connect(self, symbols: list[str]) -> None:
+        log(
+            logger,
+            logging.INFO,
+            f"WS shard connected, symbols={len(symbols)}",
+            component="market_worker",
+            event="ws_connect",
+            count=len(symbols),
+        )
         self._state.processor.on_resubscribe(symbols)
         if symbols and any(self._state.history.span(s) for s in symbols[:5]):
             self._spawn(self._backfill_gaps_later(symbols), "gap-backfill")
 
     def on_ws_disconnect(self, symbols: list[str], last_ts_ms: int | None) -> None:
+        log(
+            logger,
+            logging.WARNING,
+            f"WS shard disconnected, symbols={len(symbols)} last_ts_ms={last_ts_ms}",
+            component="market_worker",
+            event="ws_disconnect",
+            count=len(symbols),
+        )
         self._state.history.mark_disconnected(symbols, at_ts_ms=last_ts_ms)
 
     def process_event(self, event: PriceEvent) -> None:
@@ -84,8 +101,23 @@ class MarketWorker:
         ws.on_disconnect = self.on_ws_disconnect
         state.registry._on_change = self._on_universe_change
 
+        log(
+            logger,
+            logging.INFO,
+            "Market worker starting",
+            component="market_worker",
+            event="start",
+        )
         await state.registry.start()
         symbols = state.registry.symbols
+        log(
+            logger,
+            logging.INFO,
+            f"Registry ready with {len(symbols)} symbols; starting WS",
+            component="market_worker",
+            event="registry_ready",
+            count=len(symbols),
+        )
         self._tasks.append(supervise("market-process", self._process_loop))
         self._tasks.append(supervise("readiness", self._readiness_loop))
         self._tasks.append(supervise("loop-monitor", self._loop_monitor))
@@ -119,6 +151,8 @@ class MarketWorker:
         await state.ws_manager.update_symbols(symbols)
         for sym in removed:
             state.processor.reset_symbol(sym)
+            state.signal_engine.dedup.clear_symbol(sym)
+            state.notifications.forget_symbol(sym)
         if added and len(added) < len(symbols):
             self._spawn(self._warmup_symbols(sorted(added)), "kline-warmup-added")
         try:
@@ -134,13 +168,27 @@ class MarketWorker:
 
     async def _readiness_loop(self) -> None:
         state = self._state
+        was_ready: bool | None = None
         while True:
             age = state.ws_manager.last_message_age_sec
             fresh = age is not None and age < state.system.stale_connection_sec
-            metrics.ready = bool(
+            ready = bool(
                 metrics.instruments_active > 0 and metrics.ws_connections > 0 and fresh
             )
+            metrics.ready = ready
             metrics.last_message_age_ms = None if age is None else round(age * 1000, 1)
+            if was_ready is None or ready != was_ready:
+                log(
+                    logger,
+                    logging.INFO if ready else logging.WARNING,
+                    f"Screener ready={ready} instruments={metrics.instruments_active} "
+                    f"ws={metrics.ws_connections} last_msg_age_ms={metrics.last_message_age_ms}",
+                    component="market_worker",
+                    event="ready_changed",
+                    status="ready" if ready else "not_ready",
+                    count=metrics.instruments_active,
+                )
+                was_ready = ready
             await asyncio.sleep(1.0)
 
     async def _loop_monitor(self) -> None:

@@ -28,11 +28,20 @@ class SignalCounter(Protocol):
 class RecentSignals:
     """In-memory per-symbol signal timestamps for the last 24 hours."""
 
+    _SWEEP_EVERY = 256
+
     def __init__(self) -> None:
         self._by_symbol: dict[str, deque[datetime]] = defaultdict(deque)
+        self._records = 0
+
+    def __len__(self) -> int:
+        return len(self._by_symbol)
 
     def record(self, symbol: str, at: datetime) -> None:
         self._by_symbol[symbol].append(at)
+        self._records += 1
+        if self._records % self._SWEEP_EVERY == 0:
+            self.sweep(at)
 
     def count(self, symbol: str, now: datetime) -> int:
         items = self._by_symbol.get(symbol)
@@ -41,7 +50,22 @@ class RecentSignals:
         since = now - timedelta(hours=24)
         while items and items[0] < since:
             items.popleft()
+        if not items:
+            del self._by_symbol[symbol]
+            return 0
         return len(items)
+
+    def sweep(self, now: datetime) -> None:
+        since = now - timedelta(hours=24)
+        for symbol in list(self._by_symbol):
+            items = self._by_symbol[symbol]
+            while items and items[0] < since:
+                items.popleft()
+            if not items:
+                del self._by_symbol[symbol]
+
+    def forget(self, symbol: str) -> None:
+        self._by_symbol.pop(symbol, None)
 
 
 class NotificationService:
@@ -76,6 +100,9 @@ class NotificationService:
 
     def set_chat_ids(self, chat_ids: Sequence[int]) -> None:
         self._chat_ids = list(chat_ids)
+
+    def forget_symbol(self, symbol: str) -> None:
+        self._recent.forget(symbol)
 
     async def start(self) -> None:
         self._tasks.append(supervise("notifications", self._loop))
