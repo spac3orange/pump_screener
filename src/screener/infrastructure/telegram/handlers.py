@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import html
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.dispatcher.event.bases import SkipHandler
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from screener.application.metrics import metrics
@@ -20,6 +22,7 @@ from screener.infrastructure.telegram.keyboards import (
     trading_keyboard,
     trading_mainnet_confirm_keyboard,
 )
+from screener.infrastructure.telegram.middleware import AdminFilter
 from screener.infrastructure.telegram.profiles_view import (
     TRADING_SWITCH_WARNING,
     confirm_keyboard,
@@ -37,11 +40,14 @@ from screener.infrastructure.telegram.settings_input import (
     toggle_rule,
 )
 from screener.infrastructure.telegram.trade_lifecycle_format import format_money
+from screener.infrastructure.telegram.user_keyboards import USER_SETTINGS
 
 if TYPE_CHECKING:
     from screener.app_state import AppState
 
-router = Router()
+router = Router(name="admin")
+router.message.filter(AdminFilter())
+router.callback_query.filter(AdminFilter())
 
 
 def _money(value: object) -> str:
@@ -296,6 +302,49 @@ async def cmd_stats(message: Message, state: AppState) -> None:
     )
 
 
+@router.message(Command("admin_stats"))
+async def cmd_admin_stats(message: Message, state: AppState) -> None:
+    rt = state.commercial
+    if rt is None:
+        await message.answer("Коммерческий режим выключен (<code>COMMERCIAL_ENABLED=false</code>).")
+        return
+    s = await rt.repo.admin_stats(datetime.now(UTC))
+    snap = metrics.snapshot()
+    deliveries = snap.get("user_deliveries_total", {})
+    await message.answer(
+        "<b>PumpScreener — подписчики</b>\n"
+        f"Пользователей: {s['users_total']} (бот заблокирован: {s['bot_blocked']})\n"
+        f"Триалов всего: {s['trials_used']}, активных: {s['trials_active']}\n"
+        f"Подписок активных: {s['subscriptions_active']}, "
+        f"с отменённым автопродлением: {s['subscriptions_canceled']}\n"
+        f"Платящих всего: {s['paid_users']}, из триала: {s['trial_converted']}\n"
+        f"Выручка 30д: {s['revenue_stars_30d']} ⭐\n"
+        f"Аномалий оплат 30д: {s['payment_anomalies_30d']}\n\n"
+        f"Получают сигналы сейчас: {rt.registry.user_count} "
+        f"в {rt.registry.group_count} группах\n"
+        f"Очередь доставки: {rt.dispatcher.queued_messages}, "
+        f"отправлено сообщений: {snap['user_messages_sent_total']}\n"
+        f"Доставки: {', '.join(f'{k}={v}' for k, v in sorted(deliveries.items())) or '—'}\n"
+        f"Flood waits: {snap['user_flood_waits_total']}, "
+        f"writer backlog: {rt.writer.backlog}"
+    )
+
+
+@router.message(Command("admin_refund"))
+async def cmd_admin_refund(message: Message, state: AppState, command: CommandObject) -> None:
+    rt = state.commercial
+    if rt is None:
+        await message.answer("Коммерческий режим выключен.")
+        return
+    charge_id = (command.args or "").strip()
+    if not charge_id or len(charge_id) > 128 or " " in charge_id:
+        await message.answer(
+            "Использование: <code>/admin_refund &lt;telegram_payment_charge_id&gt;</code>"
+        )
+        return
+    await message.answer(html.escape(await rt.payments.admin_refund(charge_id)))
+
+
 async def _edit_trading_panel(
     query: CallbackQuery,
     trading: TradingService,
@@ -420,6 +469,9 @@ async def on_setting_value(message: Message, state: AppState) -> None:
     pending = state.pending_edit(message.from_user.id)
     if pending is None:
         return
+    if pending[0] == USER_SETTINGS:
+        # The admin is editing their own subscriber rules; let the user router handle it.
+        raise SkipHandler()
     kind, field_name = pending
     if kind == PROFILE_EDIT:
         await _on_profile_text(message, state, field_name)

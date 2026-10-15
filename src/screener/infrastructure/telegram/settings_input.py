@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from screener.config import ScreenerSettings
+from pydantic import BaseModel
 
 RULES = ("long", "short", "dump")
 FIELDS = ("period", "pct")
@@ -31,7 +31,7 @@ class SettingInputError(ValueError):
     """Admin sent a period or percent the screener cannot store."""
 
 
-def prompt_for(kind: str, field_name: str, settings: ScreenerSettings) -> str:
+def prompt_for(kind: str, field_name: str, settings: BaseModel) -> str:
     name = _NAMES[kind]
     if field_name == "period":
         minutes = getattr(settings, _PERIOD_ATTR[kind]) // 60
@@ -61,7 +61,29 @@ def parse_percent(text: str) -> float:
     return round(value, 2)
 
 
-def toggle_rule(settings: ScreenerSettings, kind: str) -> ScreenerSettings:
+_TURNOVER_SUFFIX = {"k": 1_000, "к": 1_000, "m": 1_000_000, "м": 1_000_000}
+TURNOVER_HINT = (
+    "Введите минимальный оборот за 24ч в USDT, например 500000, 500k или 1m (0 — без фильтра)."
+)
+
+
+def parse_turnover(text: str) -> float:
+    raw = text.strip().lower().replace(" ", "").replace("_", "").replace(",", ".")
+    raw = raw.removeprefix("$")
+    mult = 1
+    if raw and raw[-1] in _TURNOVER_SUFFIX:
+        mult = _TURNOVER_SUFFIX[raw[-1]]
+        raw = raw[:-1]
+    try:
+        value = float(raw) * mult
+    except ValueError:
+        raise SettingInputError("Нужно число USDT от 0 до 1 000 000 000.") from None
+    if value < 0 or value > 1_000_000_000 or value != value:
+        raise SettingInputError("Нужно число USDT от 0 до 1 000 000 000.")
+    return round(value, 2)
+
+
+def toggle_rule[M: BaseModel](settings: M, kind: str) -> M:
     if kind not in _ENABLE_ATTR:
         raise SettingInputError("Неизвестное правило.")
     updated = settings.model_copy(deep=True)
@@ -70,12 +92,12 @@ def toggle_rule(settings: ScreenerSettings, kind: str) -> ScreenerSettings:
     return updated
 
 
-def apply_setting_text(
-    settings: ScreenerSettings,
+def apply_setting_text[M: BaseModel](
+    settings: M,
     kind: str,
     field_name: str,
     text: str,
-) -> ScreenerSettings:
+) -> M:
     updated = settings.model_copy(deep=True)
     if field_name == "period":
         setattr(updated, _PERIOD_ATTR[kind], parse_period_minutes(text))

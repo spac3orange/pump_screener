@@ -17,10 +17,17 @@ from screener.application.market_processor import MarketDataProcessor
 from screener.application.notification_service import NotificationService
 from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
-from screener.application.profiles import ProfileService
+from screener.application.profiles import ActiveProfile, ProfileService
 from screener.application.signal_engine import SignalEngine
 from screener.application.trading.service import TradingService
-from screener.config import SystemSettings, get_system_settings, get_trading_settings
+from screener.commercial_runtime import CommercialRuntime, build_commercial
+from screener.config import (
+    CommercialSettings,
+    SystemSettings,
+    get_commercial_settings,
+    get_system_settings,
+    get_trading_settings,
+)
 from screener.infrastructure.bybit.lifecycle_runtime import TradeLifecycleRuntime
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
@@ -30,6 +37,7 @@ from screener.infrastructure.db.session import create_engine, create_session_fac
 from screener.infrastructure.db.trading_repo import TradingRepository
 from screener.infrastructure.http.app import create_app
 from screener.infrastructure.telegram.bot import TelegramBotService
+from screener.infrastructure.telegram.formatter import format_signal_message
 from screener.logging import log, setup_logging
 from screener.workers.market_worker import MarketWorker
 
@@ -47,7 +55,10 @@ async def build_runtime(
 ) -> tuple[AppState, MarketWorker, TelegramBotService | None]:
     import asyncio
 
-    await asyncio.to_thread(run_migrations, system.database_url)
+    if system.auto_migrate:
+        await asyncio.to_thread(run_migrations, system.database_url)
+    else:
+        logger.info("AUTO_MIGRATE=false: schema migrations are applied manually")
 
     engine = create_engine(system.database_url)
     session_factory = create_session_factory(engine)
@@ -151,6 +162,12 @@ async def build_runtime(
     state.apply_profile(active_profile, False)
     correlator.on_signal = state.dispatch_signal
 
+    commercial_settings = get_commercial_settings()
+    if commercial_settings.commercial_enabled:
+        state.commercial = await _build_commercial(
+            commercial_settings, session_factory, history, active_profile, system
+        )
+
     tg: TelegramBotService | None = None
     if system.telegram_bot_token and system.admin_id:
         tg = TelegramBotService(system.telegram_bot_token, state)
@@ -159,14 +176,53 @@ async def build_runtime(
             trading.set_notify(tg.broadcast_text)
         if lifecycle is not None:
             lifecycle.service.set_notify(tg.notify_trade_closed, tg.broadcast_text)
+        if state.commercial is not None:
+            state.commercial.dispatcher.set_send(tg.send_to_chat)
+            state.commercial.payments.set_gateway(tg.stars)
+            state.commercial.payments.set_alert(tg.broadcast_text)
+            state.commercial.expiry.set_notify(tg.notify_access_ended)
         logger.info("Telegram bot enabled for ADMIN_ID=%s", system.admin_id)
     else:
-        logger.warning(
-            "Telegram disabled: set TELEGRAM_BOT_TOKEN and ADMIN_ID in .env"
-        )
+        logger.warning("Telegram disabled: set TELEGRAM_BOT_TOKEN and ADMIN_ID in .env")
 
     worker = MarketWorker(state)
     return state, worker, tg
+
+
+async def _build_commercial(
+    settings: CommercialSettings,
+    session_factory,
+    history: PriceHistoryManager,
+    active_profile: ActiveProfile,
+    system: SystemSettings,
+) -> CommercialRuntime:
+    def format_signal(signal, signals_24h: int) -> str:
+        return format_signal_message(signal, signals_24h=signals_24h)
+
+    rt = build_commercial(
+        settings=settings,
+        session_factory=session_factory,
+        history=history,
+        template_hint=active_profile.settings,
+        format_signal=format_signal,
+    )
+    profile = active_profile.profile
+    await rt.users.bootstrap(
+        active_profile.settings,
+        source_profile_version_id=profile.current.id if profile is not None else None,
+        admin_ids=system.admin_id,
+    )
+    template = rt.users.template
+    rt.correlator.window_ms = template.correlation_window_ms
+    rt.engine.set_groups(rt.registry.groups(), template)
+    logger.info(
+        "Commercial mode ON: users=%s groups=%s price=%s XTR trial=%sh",
+        rt.registry.user_count,
+        rt.registry.group_count,
+        settings.subscription_price_stars,
+        settings.trial_duration_hours,
+    )
+    return rt
 
 
 def build_fastapi() -> FastAPI:
@@ -185,6 +241,8 @@ def build_fastapi() -> FastAPI:
         lifecycle_runtime = state.extras.get("lifecycle_runtime")
         if lifecycle_runtime is not None:
             await lifecycle_runtime.start()
+        if state.commercial is not None:
+            await state.commercial.start()
         await worker.start()
         if tg is not None:
             await tg.start_polling()
@@ -208,6 +266,8 @@ def build_fastapi() -> FastAPI:
                 event="shutdown",
             )
             await worker.stop()
+            if state.commercial is not None:
+                await state.commercial.stop()
             if lifecycle_runtime is not None:
                 await lifecycle_runtime.stop()
             if state.trading is not None:

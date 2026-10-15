@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from screener.application.correlator import SignalCorrelator
 from screener.application.instrument_registry import InstrumentRegistry
@@ -21,7 +22,14 @@ from screener.infrastructure.bybit.ws import WebSocketManager
 from screener.infrastructure.db.repositories import Repository
 from screener.logging import log
 
+if TYPE_CHECKING:
+    from screener.application.commercial.multi_engine import MultiConfigEngine
+    from screener.commercial_runtime import CommercialRuntime
+
 logger = logging.getLogger(__name__)
+
+PENDING_EDIT_TTL_SEC = 600.0
+PENDING_EDITS_MAX = 10_000
 
 
 @dataclass
@@ -42,8 +50,10 @@ class AppState:
     profiles: ProfileService | None = None
     lifecycle: PositionLifecycleService | None = None
     extras: dict[str, Any] = field(default_factory=dict)
-    # user_id -> (kind, field); one pending text prompt per admin, so bounded by ADMIN_ID.
-    pending_edits: dict[int, tuple[str, str]] = field(default_factory=dict)
+    commercial: CommercialRuntime | None = None
+    # telegram user_id -> (kind, field, monotonic deadline); bounded and expiring because
+    # subscribers can open prompts too.
+    pending_edits: dict[int, tuple[str, str, float]] = field(default_factory=dict)
 
     def dispatch_signal(self, signal: MarketSignal) -> None:
         """Hand a MarketSignal to persistence, Telegram, and optional trading."""
@@ -63,10 +73,25 @@ class AppState:
             self.trading.enqueue(signal)
 
     def begin_setting_edit(self, user_id: int, kind: str, field_name: str) -> None:
-        self.pending_edits[user_id] = (kind, field_name)
+        now = time.monotonic()
+        if user_id not in self.pending_edits and len(self.pending_edits) >= PENDING_EDITS_MAX:
+            self._prune_pending(now)
+            while len(self.pending_edits) >= PENDING_EDITS_MAX:
+                self.pending_edits.pop(next(iter(self.pending_edits)))
+        self.pending_edits[user_id] = (kind, field_name, now + PENDING_EDIT_TTL_SEC)
 
     def pending_edit(self, user_id: int) -> tuple[str, str] | None:
-        return self.pending_edits.get(user_id)
+        item = self.pending_edits.get(user_id)
+        if item is None:
+            return None
+        if time.monotonic() >= item[2]:
+            self.pending_edits.pop(user_id, None)
+            return None
+        return item[0], item[1]
+
+    def _prune_pending(self, now: float) -> None:
+        for uid in [u for u, item in self.pending_edits.items() if now >= item[2]]:
+            del self.pending_edits[uid]
 
     def clear_pending_edit(self, user_id: int) -> None:
         self.pending_edits.pop(user_id, None)
@@ -79,6 +104,10 @@ class AppState:
         )
         self.correlator.window_ms = settings.correlation_window_ms
         self.registry.set_exclude_symbols(settings.exclude_symbols)
+
+    @property
+    def commercial_engine(self) -> MultiConfigEngine | None:
+        return self.commercial.engine if self.commercial is not None else None
 
     @property
     def active_profile_name(self) -> str:

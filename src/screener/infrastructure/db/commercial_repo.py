@@ -62,6 +62,15 @@ class PaymentResult:
 
 
 @dataclass(slots=True, frozen=True)
+class PaymentRef:
+    user_id: int
+    telegram_user_id: int
+    total_amount: int
+    currency: str
+    invoice_payload: str
+
+
+@dataclass(slots=True, frozen=True)
 class RefundResult:
     found: bool
     already_refunded: bool
@@ -312,8 +321,9 @@ class CommercialRepository:
             ).scalar_one()
             last = (
                 await session.execute(
-                    select(func.coalesce(func.max(UserMonitoringProfileVersionRow.version_no), 0))
-                    .where(UserMonitoringProfileVersionRow.profile_id == profile.id)
+                    select(
+                        func.coalesce(func.max(UserMonitoringProfileVersionRow.version_no), 0)
+                    ).where(UserMonitoringProfileVersionRow.profile_id == profile.id)
                 )
             ).scalar_one()
             version_id = uuid4()
@@ -464,7 +474,8 @@ class CommercialRepository:
             if row is None:
                 return None
             row.cancel_at_period_end = cancel
-            row.status = (SubscriptionStatus.CANCELED if cancel else SubscriptionStatus.ACTIVE).value
+            status = SubscriptionStatus.CANCELED if cancel else SubscriptionStatus.ACTIVE
+            row.status = status.value
             row.canceled_at = now if cancel else None
             row.updated_at = now
             await session.flush()
@@ -688,20 +699,35 @@ class CommercialRepository:
                 duplicate=False, decision=decision, user=user, subscription=_sub(sub_row)
             )
 
-    async def find_payment(self, charge_id: str) -> tuple[int, int] | None:
-        """``(internal user id, telegram user id)`` of an applied payment."""
+    async def find_payment(self, charge_id: str) -> PaymentRef | None:
+        """The applied (non-refund) payment with this Telegram charge id."""
         stmt = (
-            select(UserRow.id, UserRow.telegram_user_id)
+            select(
+                UserRow.id,
+                UserRow.telegram_user_id,
+                PaymentRow.total_amount,
+                PaymentRow.currency,
+                PaymentRow.invoice_payload,
+            )
             .join(PaymentRow, PaymentRow.user_id == UserRow.id)
             .where(
                 PaymentRow.telegram_payment_charge_id == charge_id,
                 PaymentRow.kind != PaymentKind.REFUND.value,
+                PaymentRow.status == PaymentStatus.APPLIED.value,
             )
             .limit(1)
         )
         async with session_scope(self._sf) as session:
             row = (await session.execute(stmt)).one_or_none()
-            return None if row is None else (row.id, row.telegram_user_id)
+            if row is None:
+                return None
+            return PaymentRef(
+                user_id=row.id,
+                telegram_user_id=row.telegram_user_id,
+                total_amount=row.total_amount,
+                currency=row.currency,
+                invoice_payload=row.invoice_payload,
+            )
 
     async def apply_refund(
         self,
@@ -796,9 +822,7 @@ class CommercialRepository:
         if not rows:
             return
         async with session_scope(self._sf) as session:
-            await session.execute(
-                insert(CommercialSignalRow).values(rows).on_conflict_do_nothing()
-            )
+            await session.execute(insert(CommercialSignalRow).values(rows).on_conflict_do_nothing())
 
     async def save_user_signal_events(self, records: Iterable[UserSignalRecord]) -> None:
         rows = [
