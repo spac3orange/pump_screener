@@ -7,31 +7,18 @@ other DB tests (TEST_DATABASE_URL must point to a *test* database).
 from __future__ import annotations
 
 import asyncio
-import itertools
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from aiogram.client.session.base import BaseSession
 from aiogram.methods import (
     AnswerCallbackQuery,
     AnswerPreCheckoutQuery,
     CreateInvoiceLink,
-    EditMessageText,
     EditUserStarSubscription,
-    SendMessage,
 )
-from aiogram.types import (
-    CallbackQuery,
-    Chat,
-    Message,
-    PreCheckoutQuery,
-    RefundedPayment,
-    SuccessfulPayment,
-    Update,
-    User,
-)
+from aiogram.types import PreCheckoutQuery, RefundedPayment, SuccessfulPayment, Update
 from sqlalchemy import text
 
 from screener.app_state import AppState
@@ -45,9 +32,14 @@ from screener.domain.models import RuleMatch
 from screener.infrastructure.db.session import create_engine, create_session_factory
 from screener.infrastructure.telegram import bot as bot_module
 from screener.infrastructure.telegram.formatter import format_signal_message
-from screener.infrastructure.telegram.handlers import router as admin_router
-from screener.infrastructure.telegram.payment_handlers import payment_router
-from screener.infrastructure.telegram.user_handlers import user_router
+from tests.telegram_fakes import (
+    MockSession,
+    callback_update,
+    detach_routers,
+    msg_update,
+    next_id,
+    tg_user,
+)
 
 URL = os.getenv("TEST_DATABASE_URL", "")
 
@@ -62,87 +54,9 @@ BOB = 1002
 T0 = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
 
 
-class MockSession(BaseSession):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: list = []
-
-    async def make_request(self, bot, method, timeout=None):  # type: ignore[override]
-        self.calls.append(method)
-        if isinstance(method, SendMessage):
-            return Message(
-                message_id=len(self.calls),
-                date=datetime.now(UTC),
-                chat=Chat(id=int(method.chat_id), type="private"),
-                text=method.text,
-            )
-        if isinstance(method, CreateInvoiceLink):
-            return f"https://t.me/$invoice{len(self.calls)}"
-        return True
-
-    async def stream_content(self, *args, **kwargs):  # type: ignore[override]
-        yield b""
-
-    async def close(self) -> None:
-        return None
-
-    def texts(self, chat_id: int | None = None) -> list[str]:
-        return [
-            c.text
-            for c in self.calls
-            if isinstance(c, (SendMessage, EditMessageText))
-            and (chat_id is None or int(c.chat_id or 0) == chat_id)
-        ]
-
-    def of(self, kind: type) -> list:
-        return [c for c in self.calls if isinstance(c, kind)]
-
-
-_ids = itertools.count(1)
-
-
-def _user(uid: int) -> User:
-    return User(id=uid, is_bot=False, first_name=f"u{uid}", language_code="ru")
-
-
-def _msg(uid: int, text: str | None = None, **extra) -> Update:
-    return Update(
-        update_id=next(_ids),
-        message=Message(
-            message_id=next(_ids),
-            date=datetime.now(UTC),
-            chat=Chat(id=uid, type="private"),
-            from_user=_user(uid),
-            text=text,
-            **extra,
-        ),
-    )
-
-
-def _cb(uid: int, data: str) -> Update:
-    return Update(
-        update_id=next(_ids),
-        callback_query=CallbackQuery(
-            id=str(next(_ids)),
-            from_user=_user(uid),
-            chat_instance="ci",
-            data=data,
-            message=Message(
-                message_id=next(_ids),
-                date=datetime.now(UTC),
-                chat=Chat(id=uid, type="private"),
-                from_user=User(id=999, is_bot=True, first_name="bot"),
-                text="old",
-            ),
-        ),
-    )
-
-
-def _detach_routers() -> None:
-    for r in (admin_router, user_router, payment_router):
-        if r._parent_router is not None:
-            r._parent_router.sub_routers.remove(r)
-            r._parent_router = None
+_msg = msg_update
+_cb = callback_update
+_user = tg_user
 
 
 @pytest.fixture
@@ -199,7 +113,7 @@ async def env():
         trading=trading,  # type: ignore[arg-type]
         commercial=rt,
     )
-    _detach_routers()
+    detach_routers()
     svc = bot_module.TelegramBotService("123456:TEST-token", state)
     session = MockSession()
     svc.bot.session = session
@@ -214,7 +128,7 @@ async def env():
     yield SimpleNamespace(
         rt=rt, svc=svc, session=session, feed=feed, clock=clock, trading=trading, sf=sf
     )
-    _detach_routers()
+    detach_routers()
     await engine.dispose()
 
 
@@ -316,7 +230,7 @@ async def test_full_payment_lifecycle(env) -> None:
 
     await env.feed(
         Update(
-            update_id=next(_ids),
+            update_id=next_id(),
             pre_checkout_query=PreCheckoutQuery(
                 id="pc1",
                 from_user=_user(BOB),
@@ -330,7 +244,7 @@ async def test_full_payment_lifecycle(env) -> None:
 
     await env.feed(
         Update(
-            update_id=next(_ids),
+            update_id=next_id(),
             pre_checkout_query=PreCheckoutQuery(
                 id="pc2",
                 from_user=_user(ALICE),
