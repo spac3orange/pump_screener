@@ -53,6 +53,26 @@ the p95 tail varies 35–51 µs between identical runs, so the difference to the
 run is within run-to-run noise. For scale: at ~800 frames/s live, the budget is ~1.25 ms per
 frame, and the engine spends ~20 µs per live event.
 
+## Commercial mode (multi-user)
+
+`scripts/benchmark_commercial.py --symbols 500 --seconds 300 --users 1000 --groups 250`
+(`PYTHONPATH=scripts;src`): admin `SignalEngine` alone vs admin + `MultiConfigEngine` on the same
+`PriceHistory`, users spread over distinct configs (groups), fan-out through `UserDispatcher`.
+
+| Metric | 500 sym / 1000 users / 253 groups | 900 sym / 3000 users / 763 groups |
+|--------|-----------------------------------|-----------------------------------|
+| Live event p50 / p99, admin only | 18.6 / 39.2 µs | — |
+| Live event p50 / p99, admin + commercial | 38.1 / 116.8 µs | p99 overhead ≈ 77 µs |
+| Commercial eval p99 | 67.7 µs | — |
+| Fan-out cost | ~11 µs per delivery | — |
+| Admin signals | identical to admin-only run | identical |
+| RSS | 71 MB | — |
+
+Cost scales with the number of distinct configs (groups), not users: identical configs share one
+evaluation. The real limit is Telegram (~25 msg/s globally, ≥1 s per chat): synthetic spikes every
+20 s produce more deliveries than that, so they queue, batch (≤5 signals per message) and the
+oldest are dropped after `USER_SIGNAL_MAX_AGE_SEC`. Admin signals are never affected.
+
 ## Decisions
 
 - **PriceHistory** (`array('q'/'d')` rings, ~64 KB/symbol for 3840 s) was already optimal: not changed.

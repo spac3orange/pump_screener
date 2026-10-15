@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import (
 
 
 def create_engine(database_url: str) -> AsyncEngine:
-    return create_async_engine(database_url, pool_pre_ping=True, pool_size=5, max_overflow=10)
+    # Bound parameters (payment payloads, charge ids) must not end up in logged exceptions.
+    return create_async_engine(
+        database_url, pool_pre_ping=True, pool_size=5, max_overflow=10, hide_parameters=True
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

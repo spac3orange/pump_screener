@@ -269,6 +269,51 @@ Signal 24h: 1
 ### 7.4 Доступ
 
 `AdminAccessMiddleware` — только `ADMIN_ID` (comma-separated). Остальные отклоняются.
+При `COMMERCIAL_ENABLED=true` вместо него `UserContextMiddleware` (см. §7.5): admin-роутер
+закрыт `AdminFilter`, остальные пользователи попадают только в роутеры подписчика и оплаты.
+
+### 7.5 Коммерческий режим (PumpScreener Pro)
+
+Флаг `COMMERCIAL_ENABLED` (по умолчанию `false` — бот ровно как раньше).
+
+```
+PriceEvent (LIVE) ── SignalEngine ── SignalCorrelator ── dispatch_signal ── persistence / admin TG / trading
+        └────────── MultiConfigEngine ── GroupCorrelator ── UserDispatcher ── Telegram подписчикам
+                         ↑ группы по config_hash         ↑ ActiveUserRegistry (access_until, chat_id)
+```
+
+- Один рыночный пайплайн и одна `PriceHistory`; коммерческий движок вызывается после admin-движка
+  в отдельном `try` и не влияет на него. `GroupSignal` — отдельный тип, в trading не попадает
+  (AST-тест + runtime-тест `tests/unit/test_commercial_isolation.py`).
+- Пользователи с одинаковыми эффективными настройками = одна группа (`ScreenerSettings.config_hash()`
+  от template + пользовательских полей). Индекс `(type, interval) → отсортированные пороги`, bisect;
+  у каждой группы свой `SignalDeduplicator` (семантика = `SignalEngine`, тест эквивалентности).
+- Пользователь меняет только 3 правила (вкл/%, период 1–60 мин) и мин. оборот 24ч
+  (`UserDetectionConfig`); cooldown/escalate/reset/корреляция — из template `user_profile_templates`,
+  засеянного один раз из активного admin-профиля. Версии конфигов неизменяемы.
+- Доступ: `users.access_until` = max(конец trial, конец подписки [+grace при автопродлении]),
+  граница исключающая. Проверяется диспетчером перед каждой отправкой, поэтому доставка
+  останавливается вовремя даже без `ExpirationWorker`. Admin — bypass по роли; коммерческая копия
+  сигналов для admin выключена по умолчанию (`/account`).
+- Trial: только по кнопке, один раз (атомарный `UPDATE … WHERE trial_started_at IS NULL`), не после
+  оплаты, требует принятия `/terms` (`TERMS_VERSION`).
+- Stars: `createInvoiceLink(XTR, subscription_period=30д)`, payload `ps1_<random>` создаётся сервером.
+  `pre_checkout` (≤3с, без выдачи доступа) проверяет владельца/сумму/срок. Доступ только из
+  `successful_payment` в одной транзакции, идемпотентно по `(telegram_payment_charge_id, kind)`;
+  продление = новый charge с тем же payload. Аномалии (сумма, чужой счёт, вторая подписка…)
+  записываются и алертятся админам; вторая подписка отменяется в Telegram. Отмена/возобновление
+  автопродления — `editUserStarSubscription`, затем локально. Возврат — `/admin_refund` или
+  `refunded_payment` → доступ отозван. Сверка read-only: `scripts/reconcile_stars.py`.
+- Доставка: bounded fan-out, per-user очередь (drop-oldest), глобальный темп `USER_SEND_RATE_PER_SEC`,
+  ≥`USER_CHAT_MIN_INTERVAL_SEC` на чат, накопившиеся сигналы склеиваются (до 5), старше
+  `USER_SIGNAL_MAX_AGE_SEC` не отправляются, 429 → общая пауза, Forbidden → `bot_blocked` и удаление
+  из реестра (снимается при следующем сообщении пользователя). Итог по каждому пользователю —
+  `user_signal_events` через упорядоченный ретрай-писатель (сигнал пишется раньше событий).
+- `ExpirationWorker` (каждые `EXPIRY_CHECK_SEC`): `expire_subscriptions`, затем claim
+  `expiry_notified_until = access_until` (одно уведомление на период доступа, и после рестарта),
+  раз в час чистка сигналов старше `USER_SIGNAL_RETENTION_DAYS`.
+- Нагрузка (`scripts/benchmark_commercial.py`, 500 символов, 1000 пользователей / 253 группы):
+  live-событие p50 18.6→38.1 µs, p99 39→117 µs; admin-сигналы идентичны.
 
 ---
 
@@ -290,6 +335,11 @@ Signal 24h: 1
 Seed `Default` делает приложение (`ProfileService.bootstrap`), детерминированно из прежних настроек.
 Миграция `005`: lifecycle-колонки в `trading_executions` (все nullable, старые строки не ломаются;
 `opened_at` для уже исполненных = `created_at`).
+
+Миграция `006` (только добавляет таблицы): `users`, `user_profile_templates`,
+`user_monitoring_profiles` / `user_monitoring_profile_versions`, `payment_invoices`, `subscriptions`
+(частичный unique «одна живая подписка на пользователя»), `payments` (unique `charge_id+kind`),
+`commercial_signals`, `user_signal_events` (unique `user_id+signal_id`). Downgrade удаляет только их.
 
 Тики **не** пишутся в БД — только память.
 
@@ -385,6 +435,12 @@ Ready loop обновляет `metrics.ready` раз в секунду.
 | `/profiles` | мониторинг-профили: активация, создание, копия, переименование, удаление |
 | `/signals` | последние 10 из БД (с профилем и версией) |
 | `/stats` | counts из БД + runtime |
+| `/admin_stats` | (commercial) пользователи, trial, подписки, конверсия, выручка 30д, аномалии, доставка |
+| `/admin_refund <charge_id>` | (commercial) возврат Stars + отзыв доступа |
+
+Подписчики (только при `COMMERCIAL_ENABLED=true`): `/start`, `/account`, `/settings` (свои правила),
+`/subscription` (оплата, отмена/возобновление автопродления), `/terms`, `/support`, `/paysupport`,
+`/help`. Неизвестные и admin-команды → «Неизвестная команда».
 
 ---
 
@@ -430,6 +486,13 @@ docker logs pumpscreener-app-1
   `test_close_classifier.py`, `test_trade_lifecycle_format.py`, `test_private_stream.py`,
   `tests/integration/test_trade_lifecycle_db.py`).
 
+- коммерческий режим: эквивалентность `MultiConfigEngine` N независимым `SignalEngine`
+  (`test_multi_engine.py`), реестр, доступ/граница, диспетчер (rate limit, 429, Forbidden, max-age,
+  склейка), state machine оплат, изоляция от trading, admin-only при выключенном флаге;
+  на PostgreSQL: миграция 006 up/down, атомарный trial, идемпотентная оплата при гонке, продление,
+  отмена/возобновление, возврат, одно уведомление об окончании (`test_commercial_db.py`) и
+  end-to-end бот с mock Telegram API (`test_commercial_bot.py`).
+
 Запуск: `pytest -q` (pythonpath `src`). Перф: `docs/PERFORMANCE.md`.
 
 ---
@@ -460,6 +523,11 @@ docker logs pumpscreener-app-1
 | Миграции схемы | `alembic/versions/` |
 | Причина закрытия сделки | `application/trading/close_classifier.py` |
 | Формат сообщения о закрытии | `telegram/trade_lifecycle_format.py` |
+| Правила/группы подписчиков | `application/commercial/multi_engine.py`, `user_service.py` |
+| Доступ, trial, подписка | `application/commercial/access.py`, `trial_service.py`, `subscription_service.py` |
+| Оплата Stars | `application/commercial/payment_service.py`, `telegram/payment_handlers.py` |
+| Доставка подписчикам | `application/commercial/dispatcher.py` |
+| Тексты/кнопки подписчика | `telegram/commercial_texts.py`, `user_keyboards.py`, `user_handlers.py` |
 
 ---
 
