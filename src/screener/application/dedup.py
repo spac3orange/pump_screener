@@ -119,6 +119,9 @@ class SignalDeduplicator:
     def state_of(self, key: DedupKey) -> DedupState:
         return DedupState.ACTIVE if key.as_tuple() in self._state else DedupState.IDLE
 
+    def has_state(self, symbol: str, signal_type: SignalType, interval_sec: int) -> bool:
+        return (symbol, signal_type.value, interval_sec) in self._state
+
     @property
     def active_count(self) -> int:
         return len(self._state)

@@ -3,11 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+from screener.application.commercial.group_correlator import GroupCorrelator
+from screener.application.commercial.multi_engine import MultiConfigEngine
 from screener.application.correlator import SignalCorrelator
 from screener.application.market_processor import MarketDataProcessor
 from screener.application.price_history import PriceHistoryManager
 from screener.application.signal_engine import SignalEngine
 from screener.config import ScreenerSettings
+from screener.domain.commercial import GroupSignal
 from screener.domain.enums import Direction, HistoryQuality, SignalType
 from screener.domain.models import MarketSignal, RuleMatch
 from screener.workers.market_worker import MarketWorker
@@ -45,9 +48,15 @@ def ticker(symbol: str, msg_type: str, ts_ms: int, cs: int, **data) -> dict:
 
 
 class Harness:
-    """Real processor -> ordered price queue -> history -> engine -> correlator path."""
+    """Real processor -> ordered price queue -> history -> engine -> correlator path.
 
-    def __init__(self, **settings_kwargs) -> None:
+    ``commercial`` adds the multi-user engine on the same history, with one
+    group per ``key -> settings`` entry.
+    """
+
+    def __init__(
+        self, *, commercial: dict[str, ScreenerSettings] | None = None, **settings_kwargs
+    ) -> None:
         self.history = PriceHistoryManager()
         self.processor = MarketDataProcessor(self.history)
         cfg = settings(**settings_kwargs)
@@ -59,12 +68,23 @@ class Harness:
             on_signal=self.signals.append,
         )
         self.engine.on_matches = self.correlator.add
+        self.group_signals: list[GroupSignal] = []
+        self.commercial: MultiConfigEngine | None = None
+        if commercial is not None:
+            self.group_correlator = GroupCorrelator(
+                window_ms=cfg.correlation_window_ms, on_signal=self.group_signals.append
+            )
+            self.commercial = MultiConfigEngine(
+                self.history, cfg, on_matches=self.group_correlator.add
+            )
+            self.commercial.set_groups(commercial)
         state = SimpleNamespace(
             system=SimpleNamespace(market_queue_maxsize=100_000),
             processor=self.processor,
             history=self.history,
             signal_engine=self.engine,
             correlator=self.correlator,
+            commercial_engine=self.commercial,
         )
         self.worker = MarketWorker(state)  # type: ignore[arg-type]
         self._cs = 0

@@ -21,6 +21,7 @@ htmlcov/
 # Env / secrets
 .env
 .env.local
+.env.staging
 *.pem
 
 # IDE

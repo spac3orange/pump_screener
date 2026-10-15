@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING
 from screener.application.market_processor import normalize_klines
 from screener.application.metrics import metrics
 from screener.application.supervisor import cancel_tasks, supervise
+from screener.config import MAX_RULE_INTERVAL_SEC
 from screener.domain.enums import PriceEventKind
 from screener.domain.models import Instrument, PriceEvent
 from screener.logging import log
 
 if TYPE_CHECKING:
     from screener.app_state import AppState
+    from screener.application.commercial.multi_engine import MultiConfigEngine
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,9 @@ class MarketWorker:
         )
         self._tasks: list[asyncio.Task] = []
         self._background: set[asyncio.Task] = set()
+        self._commercial_engine: MultiConfigEngine | None = getattr(
+            state, "commercial_engine", None
+        )
 
     @property
     def queue(self) -> asyncio.Queue[PriceEvent]:
@@ -85,9 +90,16 @@ class MarketWorker:
         except Exception:
             metrics.record_error()
             logger.exception("Price event processing failed for %s", event.symbol)
-        finally:
-            metrics.price_events_processed += 1
-            metrics.price_queue_size = self._queue.qsize()
+        # Commercial rules run after the admin engine and can never affect it.
+        commercial = self._commercial_engine
+        if commercial is not None and event.kind is PriceEventKind.LIVE:
+            try:
+                commercial.evaluate(event)
+            except Exception:
+                metrics.commercial_engine_errors_total += 1
+                logger.exception("Commercial evaluation failed for %s", event.symbol)
+        metrics.price_events_processed += 1
+        metrics.price_queue_size = self._queue.qsize()
         lag = time.perf_counter() - event.received_mono
         metrics.record_latency(lag)
         if lag * 1000 > state.signal_engine.settings.max_tick_age_ms:
@@ -153,6 +165,8 @@ class MarketWorker:
             state.processor.reset_symbol(sym)
             state.signal_engine.dedup.clear_symbol(sym)
             state.notifications.forget_symbol(sym)
+            if self._commercial_engine is not None:
+                self._commercial_engine.clear_symbol(sym)
         if added and len(added) < len(symbols):
             self._spawn(self._warmup_symbols(sorted(added)), "kline-warmup-added")
         try:
@@ -210,6 +224,9 @@ class MarketWorker:
         longest = max(
             settings.long_interval_sec, settings.short_interval_sec, settings.dump_interval_sec
         )
+        if self._commercial_engine is not None:
+            # Subscribers may use any window up to 60 min; warm up the full hour.
+            longest = max(longest, MAX_RULE_INTERVAL_SEC)
         return min(1000, max(self._state.system.kline_warmup_limit, longest // 60 + 4))
 
     async def _warmup_symbols(self, symbols: list[str]) -> None:

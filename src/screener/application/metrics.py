@@ -76,6 +76,30 @@ class Metrics:
     private_ws_reconnects_total: int = 0
     position_reconciliations_total: int = 0
     lifecycle_reconciliation_errors_total: int = 0
+    # Commercial multi-user layer (counts only: no user ids, chat ids or amounts).
+    commercial_users_eligible: int = 0
+    commercial_groups: int = 0
+    commercial_evaluations_total: int = 0
+    commercial_rule_matches_total: int = 0
+    commercial_signals_total: int = 0
+    commercial_engine_errors_total: int = 0
+    user_fanout_queue_size: int = 0
+    user_fanout_drops_total: int = 0
+    user_delivery_queue_size: int = 0
+    user_messages_sent_total: int = 0
+    user_deliveries_total: dict[str, int] = field(default_factory=dict)
+    user_send_retries_total: int = 0
+    user_flood_waits_total: int = 0
+    user_bot_blocked_total: int = 0
+    user_writer_drops_total: int = 0
+    user_writer_failures_total: int = 0
+    trials_started_total: int = 0
+    payments_applied_total: int = 0
+    payments_anomaly_total: int = 0
+    payments_duplicate_total: int = 0
+    refunds_total: int = 0
+    pre_checkout_rejected_total: int = 0
+    expiry_notifications_total: int = 0
     rates: dict[str, float] = field(default_factory=dict)
     _latency: array = field(default_factory=lambda: array("d", [0.0] * _LATENCY_SAMPLES))
     _latency_n: int = 0
@@ -90,6 +114,9 @@ class Metrics:
 
     def record_signal(self) -> None:
         self.signals_total += 1
+
+    def record_delivery(self, outcome: str, n: int = 1) -> None:
+        self.user_deliveries_total[outcome] = self.user_deliveries_total.get(outcome, 0) + n
 
     def record_latency(self, seconds: float) -> None:
         self._latency[self._latency_n % _LATENCY_SAMPLES] = seconds
@@ -131,6 +158,7 @@ class Metrics:
             if not k.startswith("_") and k not in {"rates"}
         }
         counters["trade_closures_total"] = dict(self.trade_closures_total)
+        counters["user_deliveries_total"] = dict(self.user_deliveries_total)
         return {
             **counters,
             "lost_price_events": self.lost_price_events,

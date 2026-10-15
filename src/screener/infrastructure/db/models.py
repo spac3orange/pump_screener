@@ -11,11 +11,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -277,3 +280,216 @@ class TradingRuntimeStateRow(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
     updated_by_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+# --- Commercial (migration 006) ----------------------------------------------
+
+
+class UserRow(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, server_default="user")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
+    language_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    monitoring_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    access_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expiry_notified_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    bot_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class UserProfileTemplateRow(Base):
+    __tablename__ = "user_profile_templates"
+
+    code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    config_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_profile_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("monitoring_profile_versions.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class UserMonitoringProfileRow(Base):
+    __tablename__ = "user_monitoring_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("user_monitoring_profile_versions.id", use_alter=True),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class UserMonitoringProfileVersionRow(Base):
+    """Immutable: a settings change always inserts a new version."""
+
+    __tablename__ = "user_monitoring_profile_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("user_monitoring_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    config_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class PaymentInvoiceRow(Base):
+    __tablename__ = "payment_invoices"
+
+    payload: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    plan_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount_stars: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="created")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SubscriptionRow(Base):
+    __tablename__ = "subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    plan_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    invoice_payload: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    subscription_charge_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    current_period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cancel_at_period_end: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+Index(
+    "uq_subscriptions_one_live_per_user",
+    SubscriptionRow.user_id,
+    unique=True,
+    postgresql_where=SubscriptionRow.status.in_(("active", "canceled")),
+)
+
+
+class PaymentRow(Base):
+    """Append-only ledger; ``(telegram_payment_charge_id, kind)`` is the idempotency key."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id")
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    invoice_payload: Mapped[str] = mapped_column(String(64), nullable=False)
+    telegram_payment_charge_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    total_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_recurring: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    is_first_recurring: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    subscription_expiration_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    anomaly_reason: Mapped[str | None] = mapped_column(String(64))
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("telegram_payment_charge_id", "kind", name="uq_payments_charge_kind"),
+    )
+
+
+class CommercialSignalRow(Base):
+    __tablename__ = "commercial_signals"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    group_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    signal_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    interval_sec: Mapped[int] = mapped_column(Integer, nullable=False)
+    change_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    prev_price: Mapped[float] = mapped_column(Float, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserSignalEventRow(Base):
+    __tablename__ = "user_signal_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    signal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("commercial_signals.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(32))
+    attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "signal_id", name="uq_user_signal_events_user_signal"),
+    )

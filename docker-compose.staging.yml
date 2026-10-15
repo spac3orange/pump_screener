@@ -1,0 +1,47 @@
+# Staging stack: own PostgreSQL volume, own bot token, trading forced off.
+#   docker compose -p pump_screener_staging -f docker-compose.staging.yml --env-file .env.staging up -d --build
+# .env.staging must use a separate BotFather bot (TELEGRAM_BOT_TOKEN) — never the production one.
+name: pump_screener_staging
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: screener
+      POSTGRES_PASSWORD: screener
+      POSTGRES_DB: screener_staging
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U screener -d screener_staging"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.staging
+    environment:
+      DATABASE_URL: postgresql+asyncpg://screener:screener@postgres:5432/screener_staging
+      BYBIT_TRADING_MODE: disabled
+      ALLOW_MAINNET_TRADING: "false"
+      BYBIT_API_KEY: ""
+      BYBIT_API_SECRET: ""
+    ports:
+      - "8001:8000"
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
+
+volumes:
+  postgres_staging_data:

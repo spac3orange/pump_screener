@@ -122,6 +122,8 @@ class SystemSettings(BaseSettings):
     # Gaps after reconnect longer than this are restored from REST 1m klines.
     gap_backfill_min_sec: int = Field(default=60, ge=5)
     signal_count_db_timeout_sec: float = Field(default=2.0, gt=0)
+    # false: the app refuses to start on a schema behind head; run `alembic upgrade head` manually.
+    auto_migrate: bool = True
 
     telegram_bot_token: str = ""
     # Comma-separated Telegram user IDs allowed to use the bot and receive signals.
@@ -331,3 +333,44 @@ class TradingSettings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_trading_settings() -> TradingSettings:
     return TradingSettings()
+
+
+class CommercialSettings(BaseSettings):
+    """Multi-user Trial / Telegram Stars subscription (env only)."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # false: the bot stays admin-only exactly as before.
+    commercial_enabled: bool = False
+    trial_duration_hours: int = Field(default=24, ge=1, le=720)
+    # Telegram caps subscription invoices at 10000 Stars.
+    subscription_price_stars: int = Field(default=1500, ge=1, le=10_000)
+    subscription_title: str = "PumpScreener Pro"
+    # Access window kept past period end while auto-renewal is still on.
+    subscription_renewal_grace_min: int = Field(default=15, ge=0, le=1440)
+    invoice_ttl_hours: int = Field(default=24, ge=1, le=168)
+    invoice_rate_limit_per_hour: int = Field(default=5, ge=1, le=100)
+    terms_version: str = Field(default="1", min_length=1, max_length=16)
+    terms_url: str = ""
+    support_contact: str = ""
+
+    user_signal_max_age_sec: int = Field(default=120, ge=5, le=3600)
+    user_send_rate_per_sec: float = Field(default=25.0, gt=0, le=1000)
+    user_chat_min_interval_sec: float = Field(default=1.0, ge=0, le=60)
+    user_queue_maxsize: int = Field(default=50, ge=1, le=1000)
+    user_batch_max_signals: int = Field(default=5, ge=1, le=20)
+    fanout_queue_maxsize: int = Field(default=10_000, ge=100)
+    expiry_check_sec: int = Field(default=30, ge=5, le=300)
+    user_signal_retention_days: int = Field(default=30, ge=1, le=365)
+    # Incoming updates per user; bursts above this are ignored silently.
+    user_rate_per_sec: float = Field(default=3.0, gt=0, le=100)
+    user_rate_burst: int = Field(default=10, ge=1, le=100)
+
+
+@lru_cache(maxsize=1)
+def get_commercial_settings() -> CommercialSettings:
+    return CommercialSettings()
