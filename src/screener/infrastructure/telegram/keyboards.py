@@ -3,7 +3,7 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from screener.config import ScreenerSettings
-from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, EXCHANGES
+from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, BITGET, EXCHANGES
 
 
 def _flag(enabled: bool) -> str:
@@ -46,11 +46,20 @@ def trading_mainnet_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _exchange_shown(code: str, *, binance_available: bool, bitget_available: bool) -> bool:
+    if code == BINANCE:
+        return binance_available
+    if code == BITGET:
+        return bitget_available
+    return True
+
+
 def settings_keyboard(
     settings: ScreenerSettings,
     exchanges: frozenset[str] | None = None,
     *,
     binance_available: bool = True,
+    bitget_available: bool = True,
 ) -> InlineKeyboardMarkup:
     chosen = exchanges if exchanges is not None else frozenset(ALL_EXCHANGES)
     rows = [
@@ -83,7 +92,9 @@ def settings_keyboard(
                 callback_data=f"ex:{code}",
             )
             for code in ALL_EXCHANGES
-            if code != BINANCE or binance_available
+            if _exchange_shown(
+                code, binance_available=binance_available, bitget_available=bitget_available
+            )
         ],
         [InlineKeyboardButton(text="📁 Профили", callback_data="prof:list")],
     ]

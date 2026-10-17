@@ -108,6 +108,11 @@ class SystemSettings(BaseSettings):
     binance_rest_base: str = "https://fapi.binance.com"
     binance_ws_market: str = "wss://fstream.binance.com/market/stream?streams=!ticker@arr"
     binance_kline_concurrency: int = Field(default=4, ge=1, le=20)
+    bitget_enabled: bool = True
+    bitget_rest_base: str = "https://api.bitget.com"
+    bitget_ws_public: str = "wss://ws.bitget.com/v3/ws/public"
+    bitget_symbols_per_connection: int = Field(default=40, ge=1, le=200)
+    bitget_kline_concurrency: int = Field(default=4, ge=1, le=20)
     ws_symbols_per_connection: int = Field(default=100, ge=10, le=500)
     instrument_refresh_sec: int = Field(default=300, ge=30)
     # Connection watchdog: no frame (data or pong) for this long => reconnect.

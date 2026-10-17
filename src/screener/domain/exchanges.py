@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 BYBIT = "bybit"
 BINANCE = "binance"
-ALL_EXCHANGES: tuple[str, ...] = (BYBIT, BINANCE)
+BITGET = "bitget"
+ALL_EXCHANGES: tuple[str, ...] = (BYBIT, BINANCE, BITGET)
 TRADING_EXCHANGE = BYBIT
 
 
@@ -33,6 +34,12 @@ EXCHANGES: dict[str, ExchangeInfo] = {
         label="Binance",
         site_url="https://www.binance.com/",
         trade_url_template="https://www.binance.com/en/futures/{symbol}",
+    ),
+    BITGET: ExchangeInfo(
+        code=BITGET,
+        label="Bitget",
+        site_url="https://www.bitget.com/",
+        trade_url_template="https://www.bitget.com/futures/usdt/{symbol}",
     ),
 }
 

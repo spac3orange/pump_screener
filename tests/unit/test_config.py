@@ -10,6 +10,11 @@ def test_binance_system_defaults() -> None:
     assert s.binance_rest_base == "https://fapi.binance.com"
     assert "market/stream" in s.binance_ws_market
     assert s.binance_kline_concurrency == 4
+    assert s.bitget_enabled is True
+    assert s.bitget_rest_base == "https://api.bitget.com"
+    assert s.bitget_ws_public == "wss://ws.bitget.com/v3/ws/public"
+    assert s.bitget_symbols_per_connection == 40
+    assert s.bitget_kline_concurrency == 4
 
 
 def test_screener_settings_defaults() -> None:

@@ -5,6 +5,7 @@ from screener.domain.enums import SignalType
 from screener.domain.exchanges import (
     ALL_EXCHANGES,
     BINANCE,
+    BITGET,
     BYBIT,
     exchanges_label,
     normalize_exchanges,
@@ -16,15 +17,18 @@ from tests.helpers import make_signal
 def test_toggle_refuses_to_turn_off_the_last_exchange() -> None:
     only = frozenset({BYBIT})
     assert toggle_exchange(only, BYBIT) is None
-    both = frozenset(ALL_EXCHANGES)
-    assert toggle_exchange(both, BINANCE) == frozenset({BYBIT})
+    pair = frozenset({BYBIT, BINANCE})
+    assert toggle_exchange(pair, BINANCE) == frozenset({BYBIT})
     assert toggle_exchange(frozenset({BYBIT}), BINANCE) == frozenset({BYBIT, BINANCE})
+    assert toggle_exchange(frozenset(ALL_EXCHANGES), BITGET) == frozenset({BYBIT, BINANCE})
 
 
 def test_normalize_and_label() -> None:
-    assert normalize_exchanges(["bybit", "unknown", "binance"]) == frozenset(ALL_EXCHANGES)
+    assert normalize_exchanges(["bybit", "unknown", "binance"]) == frozenset({BYBIT, BINANCE})
+    assert normalize_exchanges("nope") == frozenset(ALL_EXCHANGES)
     assert exchanges_label(frozenset({BYBIT, BINANCE})) == "ByBit, Binance"
     assert exchanges_label(frozenset({BINANCE})) == "Binance"
+    assert exchanges_label(frozenset({BITGET})) == "Bitget"
 
 
 def test_recent_key_keeps_exchanges_apart() -> None:

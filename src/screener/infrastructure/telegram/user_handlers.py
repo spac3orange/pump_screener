@@ -24,7 +24,7 @@ from pydantic import ValidationError
 from screener.application.commercial.payment_service import InvoiceError, SubscriptionChangeError
 from screener.application.commercial.trial_service import TrialResult
 from screener.domain.commercial import UserAccount, UserDetectionConfig
-from screener.domain.exchanges import BINANCE, toggle_exchange
+from screener.domain.exchanges import BINANCE, BITGET, toggle_exchange
 from screener.infrastructure.telegram import commercial_texts as texts
 from screener.infrastructure.telegram.settings_input import (
     FIELDS,
@@ -62,14 +62,17 @@ logger = logging.getLogger(__name__)
 USER_EDIT = "us"
 
 
-def _binance_available(state: AppState) -> bool:
-    return BINANCE in getattr(state, "feeds", {})
+def _feed_available(state: AppState, code: str) -> bool:
+    return code in getattr(state, "feeds", {})
 
 
 def _settings_view(account: UserAccount, cfg: UserDetectionConfig, state: AppState):
     exchanges = account.enabled_exchanges
     return texts.settings_text(cfg, exchanges), user_settings_keyboard(
-        cfg, exchanges, binance_available=_binance_available(state)
+        cfg,
+        exchanges,
+        binance_available=_feed_available(state, BINANCE),
+        bitget_available=_feed_available(state, BITGET),
     )
 
 

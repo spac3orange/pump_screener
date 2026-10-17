@@ -319,7 +319,7 @@ class UserRow(Base):
     enabled_exchanges: Mapped[list[str]] = mapped_column(
         ARRAY(Text),
         nullable=False,
-        server_default=text("ARRAY['bybit','binance']::text[]"),
+        server_default=text("ARRAY['bybit','binance','bitget']::text[]"),
     )
 
 

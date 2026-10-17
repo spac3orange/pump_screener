@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from screener.application.commercial.user_service import AccountView
 from screener.config import CommercialSettings
 from screener.domain.commercial import AccessKind, UserDetectionConfig
-from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, EXCHANGES
+from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, BITGET, EXCHANGES
 
 USER_SETTINGS = "us"
 USER_ACTION = "ua"
@@ -105,11 +105,20 @@ def pay_keyboard(link: str, settings: CommercialSettings) -> InlineKeyboardMarku
     )
 
 
+def _exchange_shown(code: str, *, binance_available: bool, bitget_available: bool) -> bool:
+    if code == BINANCE:
+        return binance_available
+    if code == BITGET:
+        return bitget_available
+    return True
+
+
 def user_settings_keyboard(
     cfg: UserDetectionConfig,
     exchanges: frozenset[str] | None = None,
     *,
     binance_available: bool = True,
+    bitget_available: bool = True,
 ) -> InlineKeyboardMarkup:
     p = USER_SETTINGS
     chosen = exchanges if exchanges is not None else frozenset(ALL_EXCHANGES)
@@ -129,7 +138,9 @@ def user_settings_keyboard(
                 f"{p}:x:{code}",
             )
             for code in ALL_EXCHANGES
-            if code != BINANCE or binance_available
+            if _exchange_shown(
+                code, binance_available=binance_available, bitget_available=bitget_available
+            )
         ],
         [_btn("↩️ Сбросить по умолчанию", f"{p}:reset")],
     ]

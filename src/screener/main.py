@@ -12,6 +12,7 @@ from alembic import command
 from bybit_client import BybitGateway, create_bybit_http
 from screener.app_state import AppState
 from screener.application.binance_processor import BinanceTickerProcessor
+from screener.application.bitget_processor import BitgetTickerProcessor
 from screener.application.correlator import SignalCorrelator
 from screener.application.instrument_registry import InstrumentRegistry
 from screener.application.market_feed import MarketFeed
@@ -32,7 +33,7 @@ from screener.config import (
     get_system_settings,
     get_trading_settings,
 )
-from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, BYBIT, normalize_exchanges
+from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, BITGET, BYBIT, normalize_exchanges
 from screener.infrastructure.binance.mapping import (
     is_crypto_usdt_perpetual,
 )
@@ -41,6 +42,14 @@ from screener.infrastructure.binance.mapping import (
 )
 from screener.infrastructure.binance.rest import BinanceRestClient
 from screener.infrastructure.binance.ws import BinanceTickerStream
+from screener.infrastructure.bitget.mapping import (
+    is_crypto_usdt_perpetual as is_bitget_crypto_usdt_perpetual,
+)
+from screener.infrastructure.bitget.mapping import (
+    map_instrument as map_bitget_instrument,
+)
+from screener.infrastructure.bitget.rest import BitgetRestClient
+from screener.infrastructure.bitget.ws import BitgetTickerStream
 from screener.infrastructure.bybit.lifecycle_runtime import TradeLifecycleRuntime
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
@@ -178,9 +187,12 @@ async def build_runtime(
     state.admin_exchanges = await _load_admin_exchanges(repo)
 
     binance_history = PriceHistoryManager() if system.binance_enabled else None
+    bitget_history = PriceHistoryManager() if system.bitget_enabled else None
     histories: dict[str, PriceHistoryManager] = {BYBIT: history}
     if binance_history is not None:
         histories[BINANCE] = binance_history
+    if bitget_history is not None:
+        histories[BITGET] = bitget_history
 
     commercial_settings = get_commercial_settings()
     if commercial_settings.commercial_enabled:
@@ -203,6 +215,11 @@ async def build_runtime(
         state.feeds[BINANCE] = binance_feed
         workers.append(MarketWorker(state, feed=binance_feed))
         binance_feed.evaluate_admin = BINANCE in state.admin_exchanges
+    if bitget_history is not None:
+        bitget_feed = _build_bitget_feed(system, state, screener_settings, repo, bitget_history)
+        state.feeds[BITGET] = bitget_feed
+        workers.append(MarketWorker(state, feed=bitget_feed))
+        bitget_feed.evaluate_admin = BITGET in state.admin_exchanges
 
     tg: TelegramBotService | None = None
     if system.telegram_bot_token and system.admin_id:
@@ -292,6 +309,73 @@ def _build_binance_feed(
         primary=False,
         evaluate_admin=BINANCE in state.admin_exchanges,
         kline_concurrency=system.binance_kline_concurrency,
+        kline_warmup_limit=system.kline_warmup_limit,
+        stale_connection_sec=float(system.stale_connection_sec),
+        gap_backfill_min_sec=system.gap_backfill_min_sec,
+    )
+
+
+def _build_bitget_feed(
+    system: SystemSettings,
+    state: AppState,
+    settings: ScreenerSettings,
+    repo: Repository,
+    history: PriceHistoryManager,
+) -> MarketFeed:
+    stats = metrics.feed(BITGET)
+    rest = BitgetRestClient(system.bitget_rest_base, stats=stats)
+    processor = BitgetTickerProcessor(stats, history)
+    signal_engine = SignalEngine(history, settings)
+    correlator = SignalCorrelator(
+        window_ms=settings.correlation_window_ms,
+        rule_version=lambda: signal_engine.rule_version,
+        exchange=BITGET,
+        on_signal=state.dispatch_monitor_signal,
+    )
+    signal_engine.on_matches = correlator.add
+    registry = InstrumentRegistry(
+        None,
+        refresh_sec=system.instrument_refresh_sec,
+        exclude_symbols=settings.exclude_symbols,
+        instrument_sink=repo,
+        fetch=rest.fetch_instruments,
+        accept=is_bitget_crypto_usdt_perpetual,
+        mapper=map_bitget_instrument,
+        stats=stats,
+        exchange=BITGET,
+    )
+
+    async def _noop_msg(_msg: dict, _mono: float) -> None:
+        return None
+
+    ws = BitgetTickerStream(
+        system.bitget_ws_public,
+        on_message=_noop_msg,
+        stats=stats,
+        stale_connection_sec=float(system.stale_connection_sec),
+        symbols_per_connection=system.bitget_symbols_per_connection,
+        compression=None,
+        max_queue=system.ws_max_queue,
+    )
+    commercial_engine = None
+    if state.commercial is not None:
+        commercial_engine = state.commercial.engines.get(BITGET)
+    return MarketFeed(
+        exchange=BITGET,
+        processor=processor,
+        history=history,
+        signal_engine=signal_engine,
+        correlator=correlator,
+        stats=stats,
+        commercial_engine=commercial_engine,
+        registry=registry,
+        ws=ws,
+        rest=rest,
+        repo=repo,
+        notifications=state.notifications,
+        primary=False,
+        evaluate_admin=BITGET in state.admin_exchanges,
+        kline_concurrency=system.bitget_kline_concurrency,
         kline_warmup_limit=system.kline_warmup_limit,
         stale_connection_sec=float(system.stale_connection_sec),
         gap_backfill_min_sec=system.gap_backfill_min_sec,

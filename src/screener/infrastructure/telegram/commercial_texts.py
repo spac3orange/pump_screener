@@ -56,7 +56,7 @@ def rules_text(cfg: UserDetectionConfig) -> str:
 
 def welcome_text(settings: CommercialSettings, *, terms_needed: bool, trial: bool) -> str:
     lines = [
-        f"<b>{PRODUCT}</b> — сигналы о резких движениях цены на Bybit и Binance "
+        f"<b>{PRODUCT}</b> — сигналы о резких движениях цены на Bybit, Binance и Bitget "
         "(USDT Perpetual) по вашим правилам.",
         "",
         "Вы сами задаёте процент и период для лонга, шорта и дампа в /settings.",
@@ -185,7 +185,7 @@ def paysupport_text(settings: CommercialSettings) -> str:
 def help_text(settings: CommercialSettings) -> str:
     return (
         f"<b>{PRODUCT} — справка</b>\n\n"
-        "Бот следит за USDT Perpetual на Bybit и Binance и присылает сигнал, когда цена "
+        "Бот следит за USDT Perpetual на Bybit, Binance и Bitget и присылает сигнал, когда цена "
         "меняется на заданный процент за заданный период:\n"
         "🟢 <b>Лонг</b> — рост на X% за N минут\n"
         "🔴 <b>Шорт</b> — падение на X% за N минут\n"

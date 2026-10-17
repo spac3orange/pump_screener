@@ -36,6 +36,21 @@ Downgrade to 006 drops only what 007 added. `AUTO_MIGRATE=false` in production; 
 **Geo check:** Binance `fapi` returns HTTP 451 from banned regions. Before enabling
 `BINANCE_ENABLED=true` on the server, `curl -sI https://fapi.binance.com/fapi/v1/ping`.
 
+Migration 008 only appends `bitget` to `users.enabled_exchanges` (server default and
+existing rows). Downgrade to 007 removes that element and restores the previous default.
+A saved admin set in `app_settings` (`admin_exchanges`) is left as stored: if it has no
+`bitget`, the admin Bitget engine stays off until the admin turns it on in `/settings`.
+A missing key still means every exchange, including Bitget.
+`AUTO_MIGRATE=false` in production; apply `alembic upgrade head` manually after a backup.
+Before `BITGET_ENABLED=true`, confirm instruments from the server:
+
+```bash
+curl -s "https://api.bitget.com/api/v3/market/instruments?category=USDT-FUTURES" | head -c 200
+```
+
+The payload must contain `"code":"00000"`. Working `.env` can omit `BITGET_*`; the defaults
+turn the feed on.
+
 ## 2b. Migration 006 on production (historical)
 
 Migration 006 is additive (new tables only). Rehearsed on a copy of the production volume

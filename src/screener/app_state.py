@@ -86,9 +86,10 @@ class AppState:
 
     async def set_admin_exchanges(self, exchanges: set[str]) -> None:
         self.admin_exchanges = set(exchanges)
-        feed = self.feeds.get("binance")
-        if feed is not None:
-            feed.evaluate_admin = "binance" in self.admin_exchanges
+        for code, feed in self.feeds.items():
+            if getattr(feed, "primary", False):
+                continue
+            feed.evaluate_admin = code in self.admin_exchanges
         if self.repo is not None:
             await self.repo.set_app_setting(
                 "admin_exchanges", {"exchanges": sorted(exchanges)}

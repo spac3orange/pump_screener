@@ -15,7 +15,7 @@ from screener.application.profiles import ProfileService
 from screener.application.trading.lifecycle import PositionLifecycleService
 from screener.application.trading.service import AccountStatsView, TradingService
 from screener.config import ScreenerSettings
-from screener.domain.exchanges import BINANCE, BYBIT, exchanges_label, toggle_exchange
+from screener.domain.exchanges import BINANCE, BITGET, BYBIT, exchanges_label, toggle_exchange
 from screener.domain.profiles import ProfileError, ProfileNameTaken, normalize_profile_name
 from screener.infrastructure.telegram.help_text import build_help_messages
 from screener.infrastructure.telegram.keyboards import (
@@ -195,8 +195,8 @@ def _settings_text(settings: ScreenerSettings, profile_name: str | None = None) 
     return "\n".join(lines)
 
 
-def _binance_available(state: AppState) -> bool:
-    return BINANCE in getattr(state, "feeds", {})
+def _feed_available(state: AppState, code: str) -> bool:
+    return code in getattr(state, "feeds", {})
 
 
 def _settings_screen(state: AppState) -> tuple[str, InlineKeyboardMarkup]:
@@ -208,7 +208,10 @@ def _settings_screen(state: AppState) -> tuple[str, InlineKeyboardMarkup]:
     if BYBIT not in chosen:
         text += "\n<i>Bybit OFF: уведомления админу выключены, движок и торговля работают.</i>"
     return text, settings_keyboard(
-        settings, chosen, binance_available=_binance_available(state)
+        settings,
+        chosen,
+        binance_available=_feed_available(state, BINANCE),
+        bitget_available=_feed_available(state, BITGET),
     )
 
 
@@ -216,7 +219,8 @@ def _settings_screen(state: AppState) -> tuple[str, InlineKeyboardMarkup]:
 async def cmd_start(message: Message, state: AppState) -> None:
     await message.answer(
         "<b>Bybit Market Screener</b>\n"
-        "Мониторинг crypto USDT Linear Perpetual на Bybit и Binance: лонг, шорт и дамп.\n\n"
+        "Мониторинг crypto USDT Linear Perpetual на Bybit, Binance и Bitget: "
+        "лонг, шорт и дамп.\n\n"
         "Команды:\n"
         "/status — состояние\n"
         "/settings — настройки активного профиля\n"

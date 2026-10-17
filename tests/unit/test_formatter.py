@@ -21,6 +21,19 @@ def test_binance_ticker_link_and_message() -> None:
     )
     assert "🔉 Signal 24h: 3" in text
 
+
+def test_bitget_ticker_link_and_message() -> None:
+    assert ticker_link("BTCUSDT", "bitget") == (
+        '<a href="https://www.bitget.com/futures/usdt/BTCUSDT">BTC</a>'
+    )
+    signal = make_signal(SignalType.PUMP, 180, 5.0, symbol="ETHUSDT", exchange="bitget")
+    text = format_signal_message(signal, signals_24h=2)
+    assert text.startswith(
+        '<a href="https://www.bitget.com/">Bitget</a> – 3M – '
+        '<a href="https://www.bitget.com/futures/usdt/ETHUSDT">ETH</a>'
+    )
+
+
 BYBIT = '<a href="https://www.bybit.com/">ByBit</a>'
 
 

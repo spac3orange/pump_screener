@@ -180,7 +180,7 @@ def _part_overview(settings: ScreenerSettings, instruments: int | None) -> str:
     blocks = [
         "❓ <b>Как работают сигналы</b>\n"
         "Бот круглосуточно следит за криптовалютными USDT perpetual-фьючерсами "
-        "Bybit и Binance (без TradFi, pre-launch и срочных фьючерсов) и ловит резкие "
+        "Bybit, Binance и Bitget (без TradFi, pre-launch и срочных фьючерсов) и ловит резкие "
         "изменения <code>lastPrice</code>. Список инструментов обновляется "
         "автоматически.\n"
         f"{universe}"
@@ -245,7 +245,7 @@ def _part_reading(settings: ScreenerSettings) -> str:
     blocks = [
         "📨 <b>Как читать уведомление</b>\n"
         f"{alert}\n\n"
-        "• Первая строка — биржа (ссылка на сайт Bybit или Binance), интервал правила "
+        "• Первая строка — биржа (ссылка на сайт Bybit, Binance или Bitget), интервал правила "
         "и монета (тикер — ссылка на страницу инструмента на этой бирже).\n"
         "• Вторая строка — сработавшее правило: изменение цены в %, в скобках "
         "<code>цена в начале окна-текущая цена</code>.\n"
