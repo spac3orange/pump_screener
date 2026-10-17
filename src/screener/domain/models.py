@@ -24,6 +24,7 @@ class Instrument:
     quote_coin: str
     symbol_type: str | None
     is_pre_listing: bool
+    exchange: str = "bybit"
 
 
 def _to_float(value: Any) -> float | None:

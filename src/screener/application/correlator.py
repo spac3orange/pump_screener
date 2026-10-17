@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from screener.application.metrics import metrics
 from screener.domain.enums import Direction, SignalType
+from screener.domain.exchanges import BYBIT
 from screener.domain.models import MarketSignal, PriceEvent, RuleMatch, SignalContext
 from screener.domain.rules import DIRECTION_OF, SEVERITY
 from screener.logging import log
@@ -44,10 +45,12 @@ class SignalCorrelator:
         window_ms: int,
         rule_version: Callable[[], str],
         on_signal: SignalHandler | None = None,
+        exchange: str = BYBIT,
     ) -> None:
         self.window_ms = window_ms
         self._rule_version = rule_version
         self.on_signal = on_signal
+        self.exchange = exchange
         self._groups: dict[tuple[str, Direction], _Group] = {}
 
     def add(
@@ -93,6 +96,7 @@ class SignalCorrelator:
             rule_version=ctx.rule_version,
             turnover_24h=group.turnover_24h,
             volume_24h=group.volume_24h,
+            exchange=self.exchange,
             monitoring_profile_id=ctx.profile_id,
             monitoring_profile_version_id=ctx.profile_version_id,
             monitoring_profile_name=ctx.profile_name,

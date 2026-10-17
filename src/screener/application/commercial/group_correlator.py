@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from screener.application.metrics import metrics
 from screener.domain.commercial import GroupSignal
 from screener.domain.enums import Direction, SignalType
+from screener.domain.exchanges import BYBIT
 from screener.domain.models import PriceEvent, RuleMatch
 from screener.domain.rules import DIRECTION_OF, SEVERITY
 
@@ -28,9 +29,16 @@ class _Pending:
 class GroupCorrelator:
     """``SignalCorrelator`` semantics per ``(group, symbol, direction)``."""
 
-    def __init__(self, *, window_ms: int, on_signal: GroupSignalHandler | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        window_ms: int,
+        on_signal: GroupSignalHandler | None = None,
+        exchange: str = BYBIT,
+    ) -> None:
         self.window_ms = window_ms
         self.on_signal = on_signal
+        self.exchange = exchange
         self._pending: dict[_Key, _Pending] = {}
 
     @property
@@ -72,6 +80,7 @@ class GroupCorrelator:
             matches=tuple(matches),
             detected_at=datetime.fromtimestamp(primary.detected_ts_ms / 1000, tz=UTC),
             turnover_24h=pending.turnover_24h,
+            exchange=self.exchange,
         )
         metrics.commercial_signals_total += 1
         if self.on_signal is None:

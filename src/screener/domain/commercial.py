@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from screener.config import MAX_RULE_INTERVAL_SEC, ScreenerSettings
 from screener.domain.enums import Direction, HistoryQuality, SignalType
+from screener.domain.exchanges import ALL_EXCHANGES
 from screener.domain.models import RuleMatch
 
 # Telegram Stars subscriptions currently support exactly one period: 30 days.
@@ -140,6 +141,7 @@ class UserAccount:
     expiry_notified_until: datetime | None
     created_at: datetime | None = None
     language_code: str | None = None
+    enabled_exchanges: frozenset[str] = field(default_factory=lambda: frozenset(ALL_EXCHANGES))
 
     @property
     def is_admin(self) -> bool:
@@ -236,6 +238,7 @@ class GroupSignal:
     matches: tuple[RuleMatch, ...]
     detected_at: datetime
     turnover_24h: float | None = None
+    exchange: str = "bybit"
     id: UUID = field(default_factory=uuid4)
 
     @property
@@ -282,6 +285,7 @@ class GroupSignal:
             "prev_price": self.prev_price,
             "detected_at": self.detected_at.isoformat(),
             "turnover_24h": self.turnover_24h,
+            "exchange": self.exchange,
             "history_quality": self.history_quality.value,
             "level": self.level,
             "matches": [m.to_payload() for m in self.matches],

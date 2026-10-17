@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import time
 
-from perfutil import Workload, percentiles_us, rss_mb, run_isolated, top_types
+from perfutil import DualWorkload, Workload, percentiles_us, rss_mb, run_isolated, top_types
 
 from screener.application.metrics import metrics
 
@@ -66,12 +66,42 @@ def _lookup_us(wl: Workload, n: int = 50_000) -> float:
     return (time.perf_counter() - start) / n * 1e6
 
 
+def run_dual(seconds: int) -> None:
+    metrics.__init__()
+    rss0 = rss_mb()
+    wl = DualWorkload()
+    wl.snapshot_all()
+    wl.prefill_history()
+    rss_history = rss_mb()
+    cpu0, wall0 = time.process_time(), time.perf_counter()
+    for _ in range(seconds):
+        wl.step_second(keep_samples=False)
+    wall = time.perf_counter() - wall0
+    cpu = time.process_time() - cpu0
+    print(
+        f"dual bybit={wl.bybit_symbols} binance={wl.binance_symbols} "
+        f"market_seconds={seconds} bybit_frames={wl.bybit.frames} "
+        f"binance_frames={wl.binance_frames} signals={wl.bybit.signals}"
+    )
+    print(
+        f"  rss_start_mb={rss0:.1f} rss_after_history_mb={rss_history:.1f} "
+        f"history_mb={rss_history - rss0:.1f} rss_end_mb={rss_mb():.1f} "
+        f"wall_s={wall:.2f} cpu_s={cpu:.2f}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbols", type=int, nargs="+", default=[500, 900])
     parser.add_argument("--seconds", type=int, default=120)
     parser.add_argument("--types", action="store_true", help="print top object types")
+    parser.add_argument(
+        "--dual", action="store_true", help="Bybit 500 + Binance 523 synthetic feeds together"
+    )
     args = parser.parse_args()
+    if args.dual:
+        run_dual(args.seconds)
+        return
     if len(args.symbols) > 1:
         extra = ["--seconds", str(args.seconds)] + (["--types"] if args.types else [])
         raise SystemExit(run_isolated(__file__, args.symbols, extra))

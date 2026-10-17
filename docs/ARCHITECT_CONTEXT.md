@@ -6,9 +6,9 @@
 
 ## 1. Продукт и границы MVP
 
-**Что это:** круглосуточный скринер резких движений цены по публичному рынку Bybit.
+**Что это:** круглосуточный скринер резких движений цены по публичным рынкам Bybit и Binance.
 
-**Что мониторит:** только crypto **USDT Linear Perpetual** в статусе Trading.
+**Что мониторит:** только crypto **USDT Linear Perpetual** в статусе Trading (Binance: `PERPETUAL` + `underlyingType=COIN`).
 
 **Что исключено:** TradFi (`stock` / `ETF` / `commodity` / `forex`), PreLaunch, срочные фьючерсы, spot.
 
@@ -30,7 +30,7 @@
 |------|------------|
 | Runtime | Python 3.12, asyncio |
 | HTTP | FastAPI + uvicorn |
-| Market data | Bybit V5 public REST + WebSocket `tickers.{symbol}` |
+| Market data | Bybit V5 public REST + WebSocket `tickers.{symbol}`; Binance USDⓈ-M `!ticker@arr` (monitoring only) |
 | JSON | orjson |
 | DB | PostgreSQL 16, SQLAlchemy 2 async (asyncpg), Alembic |
 | Bot | aiogram 3, parse mode HTML |
@@ -111,8 +111,11 @@ Bybit WS tickers.*
               → RuleMatch[] → SignalCorrelator.add
                    → MarketSignal → AppState.dispatch_signal
                         ├─ PersistenceService (ordered DB write)
-                        └─ NotificationService (Telegram, independent)
+                        ├─ NotificationService (Telegram, if exchange is on for the admin)
+                        └─ TradingService.enqueue (Bybit only)
 ```
+
+A second `MarketFeed` for Binance (`BinanceTickerStream` → `BinanceTickerProcessor` → own `PriceHistory` / engines) runs the same detection. Binance `MarketSignal` goes to `dispatch_monitor_signal` (persist + notify, never trading). `/readyz` stays Bybit-only because trading depends on it; Binance degradation is a nested `feeds.binance` metric and a `system_events` row.
 
 ### 5.1 WebSocket
 
@@ -229,7 +232,7 @@ Signal 24h: 1
 
 ### 7.1 Два слоя
 
-1. **SystemSettings** — только env (DB, Bybit URLs, WS, TG token, ADMIN_ID, concurrency…).
+1. **SystemSettings** — только env (DB, Bybit/Binance URLs, WS, TG token, ADMIN_ID, concurrency…). `BINANCE_ENABLED=false` выключает весь Binance feed.
 2. **ScreenerSettings** — правила скринера, хранятся в **мониторинг-профилях** (PostgreSQL — источник истины):
    - профиль = полный снимок `ScreenerSettings.canonical_config()` (не overlay), версии неизменяемые;
    - `config_schema_version` + `config_hash` (sha256 канонического JSON; `rule_version` = первые 12 символов);

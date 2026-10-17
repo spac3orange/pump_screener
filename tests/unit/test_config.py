@@ -4,6 +4,14 @@ from pydantic import ValidationError
 from screener.config import ScreenerSettings, SystemSettings, get_system_settings
 
 
+def test_binance_system_defaults() -> None:
+    s = SystemSettings(_env_file=None)
+    assert s.binance_enabled is True
+    assert s.binance_rest_base == "https://fapi.binance.com"
+    assert "market/stream" in s.binance_ws_market
+    assert s.binance_kline_concurrency == 4
+
+
 def test_screener_settings_defaults() -> None:
     s = ScreenerSettings()
     assert s.enable_long is True

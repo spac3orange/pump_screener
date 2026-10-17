@@ -9,6 +9,7 @@ coalesced or dropped (guarded by `tests/unit/test_signal_golden.py`).
 |--------|------------------|
 | `scripts/measure_pipeline.py --duration 25 [--profile] [--compression none] [--max-queue N]` | live Bybit public WS: CPU %, RSS, frames/s, evals/s, pipeline p50/p95/p99, event-loop lag, drops |
 | `scripts/benchmark_performance.py --seconds 300 [--types]` | synthetic full pipeline (orjson → processor → history → engine → correlator), each symbol count in a fresh subprocess |
+| `scripts/benchmark_performance.py --dual --seconds 120` | Bybit 500 + Binance 523 synthetic feeds together (~+34 MB PriceHistory for ~523 Binance symbols) |
 | `scripts/soak_synthetic.py` | 3840 s warmup + 3600 s market at 500/900 symbols with periodic spikes; RSS must plateau (exit 1 on growth > 3 MB) |
 | `scripts/bench_history.py` | PriceHistory fill/lookup micro-benchmark |
 

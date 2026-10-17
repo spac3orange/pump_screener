@@ -15,9 +15,76 @@ _RATE_FIELDS = (
 )
 
 
+def _percentiles_ms(samples: array, count: int) -> dict[str, float | None]:
+    n = min(count, _LATENCY_SAMPLES)
+    if n == 0:
+        return {"p50": None, "p95": None, "p99": None}
+    values = sorted(samples[:n])
+    return {
+        "p50": round(values[int(n * 0.50)] * 1000, 3),
+        "p95": round(values[min(n - 1, int(n * 0.95))] * 1000, 3),
+        "p99": round(values[min(n - 1, int(n * 0.99))] * 1000, 3),
+    }
+
+
+@dataclass
+class FeedMetrics:
+    """Counters of one additional (non-Bybit) market feed.
+
+    Field names mirror the Bybit counters on ``Metrics`` so the market worker,
+    registry and stream can write either object.
+    """
+
+    instruments_active: int = 0
+    ws_connections: int = 0
+    ws_reconnects: int = 0
+    ws_frames_total: int = 0
+    ws_decode_errors_total: int = 0
+    ticker_messages_total: int = 0
+    snapshot_seeds_total: int = 0
+    live_price_events_total: int = 0
+    enrichment_updates_total: int = 0
+    out_of_order_total: int = 0
+    price_events_in: int = 0
+    price_events_processed: int = 0
+    price_queue_size: int = 0
+    price_queue_blocked_total: int = 0
+    late_price_events_total: int = 0
+    rest_throttled_total: int = 0
+    exchange_clock_skew_ms: float = 0.0
+    last_message_age_ms: float | None = None
+    ready: bool = False
+    _latency: array = field(default_factory=lambda: array("d", [0.0] * _LATENCY_SAMPLES))
+    _latency_n: int = 0
+
+    def record_reconnect(self) -> None:
+        self.ws_reconnects += 1
+
+    def record_latency(self, seconds: float) -> None:
+        self._latency[self._latency_n % _LATENCY_SAMPLES] = seconds
+        self._latency_n += 1
+
+    def latency_percentiles_ms(self) -> dict[str, float | None]:
+        return _percentiles_ms(self._latency, self._latency_n)
+
+    @property
+    def lost_price_events(self) -> int:
+        return self.price_events_in - self.price_events_processed - self.price_queue_size
+
+    def snapshot(self) -> dict:
+        out = {k: v for k, v in vars(self).items() if not k.startswith("_")}
+        out["lost_price_events"] = self.lost_price_events
+        out["pipeline_latency_ms"] = self.latency_percentiles_ms()
+        return out
+
+
 @dataclass
 class Metrics:
-    """Process-local counters. Single event loop, so no locking."""
+    """Process-local counters. Single event loop, so no locking.
+
+    Top-level market counters describe the Bybit feed; other exchanges live in
+    ``feeds`` (engine and signal counters are totals over all exchanges).
+    """
 
     instruments_active: int = 0
     ws_connections: int = 0
@@ -62,6 +129,7 @@ class Metrics:
     trade_signals_received_total: int = 0
     trade_signals_ignored_total: int = 0
     trade_signals_skipped_total: int = 0
+    trade_signals_foreign_exchange_total: int = 0
     orders_submitted_total: int = 0
     orders_filled_total: int = 0
     orders_failed_total: int = 0
@@ -100,6 +168,7 @@ class Metrics:
     refunds_total: int = 0
     pre_checkout_rejected_total: int = 0
     expiry_notifications_total: int = 0
+    feeds: dict[str, FeedMetrics] = field(default_factory=dict)
     rates: dict[str, float] = field(default_factory=dict)
     _latency: array = field(default_factory=lambda: array("d", [0.0] * _LATENCY_SAMPLES))
     _latency_n: int = 0
@@ -123,15 +192,13 @@ class Metrics:
         self._latency_n += 1
 
     def latency_percentiles_ms(self) -> dict[str, float | None]:
-        n = min(self._latency_n, _LATENCY_SAMPLES)
-        if n == 0:
-            return {"p50": None, "p95": None, "p99": None}
-        values = sorted(self._latency[:n])
-        return {
-            "p50": round(values[int(n * 0.50)] * 1000, 3),
-            "p95": round(values[min(n - 1, int(n * 0.95))] * 1000, 3),
-            "p99": round(values[min(n - 1, int(n * 0.99))] * 1000, 3),
-        }
+        return _percentiles_ms(self._latency, self._latency_n)
+
+    def feed(self, exchange: str) -> FeedMetrics:
+        stats = self.feeds.get(exchange)
+        if stats is None:
+            stats = self.feeds[exchange] = FeedMetrics()
+        return stats
 
     def update_rates(self) -> None:
         now = time.monotonic()
@@ -155,8 +222,9 @@ class Metrics:
         counters = {
             k: v
             for k, v in vars(self).items()
-            if not k.startswith("_") and k not in {"rates"}
+            if not k.startswith("_") and k not in {"rates", "feeds"}
         }
+        counters["feeds"] = {name: f.snapshot() for name, f in self.feeds.items()}
         counters["trade_closures_total"] = dict(self.trade_closures_total)
         counters["user_deliveries_total"] = dict(self.user_deliveries_total)
         return {

@@ -109,6 +109,7 @@ def make_signal(
     prev_price: float = 1.0,
     price: float = 1.0,
     extra: tuple[RuleMatch, ...] = (),
+    exchange: str = "bybit",
 ) -> MarketSignal:
     primary = RuleMatch(
         signal_type=signal_type,
@@ -128,4 +129,5 @@ def make_signal(
         matches=(primary, *extra),
         detected_at=datetime(2026, 10, 12, 8, 4, tzinfo=UTC),
         rule_version="abc",
+        exchange=exchange,
     )

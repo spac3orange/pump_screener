@@ -13,6 +13,7 @@ from screener.config import ScreenerSettings
 from screener.domain.enums import DeliveryStatus
 from screener.domain.models import Instrument, MarketSignal
 from screener.infrastructure.db.models import (
+    AppSettingsRow,
     InstrumentRow,
     NotificationRow,
     ScreenerSettingsRow,
@@ -33,6 +34,7 @@ class Repository:
             now = datetime.now(UTC)
             for inst in instruments:
                 stmt = insert(InstrumentRow).values(
+                    exchange=getattr(inst, "exchange", "bybit") or "bybit",
                     symbol=inst.symbol,
                     contract_type=inst.contract_type,
                     status=inst.status,
@@ -44,7 +46,7 @@ class Repository:
                     updated_at=now,
                 )
                 stmt = stmt.on_conflict_do_update(
-                    index_elements=[InstrumentRow.symbol],
+                    index_elements=[InstrumentRow.exchange, InstrumentRow.symbol],
                     set_={
                         "contract_type": inst.contract_type,
                         "status": inst.status,
@@ -62,6 +64,7 @@ class Repository:
         async with session_scope(self._sf) as session:
             row = SignalRow(
                 id=signal.id,
+                exchange=signal.exchange,
                 symbol=signal.symbol,
                 signal_type=signal.signal_type.value,
                 interval_sec=signal.interval_sec,
@@ -121,10 +124,19 @@ class Repository:
             return None if row is None else dict(row.config)
 
     async def count_symbol_signals_24h(
-        self, symbol: str, *, now: datetime, exclude_id: UUID | None = None
+        self,
+        symbol: str,
+        *,
+        now: datetime,
+        exclude_id: UUID | None = None,
+        exchange: str = "bybit",
     ) -> int:
         since = now - timedelta(hours=24)
-        conditions = [SignalRow.symbol == symbol, SignalRow.detected_at >= since]
+        conditions = [
+            SignalRow.symbol == symbol,
+            SignalRow.exchange == exchange,
+            SignalRow.detected_at >= since,
+        ]
         if exclude_id is not None:
             conditions.append(SignalRow.id != exclude_id)
         async with session_scope(self._sf) as session:
@@ -147,6 +159,21 @@ class Repository:
             )
             counts = {signal_type: int(n) for signal_type, n in result.all()}
             return {"total": sum(counts.values()), "by_type": counts}
+
+    async def get_app_setting(self, key: str) -> dict[str, Any] | None:
+        async with session_scope(self._sf) as session:
+            row = await session.get(AppSettingsRow, key)
+            return None if row is None else dict(row.value)
+
+    async def set_app_setting(self, key: str, value: dict[str, Any]) -> None:
+        async with session_scope(self._sf) as session:
+            now = datetime.now(UTC)
+            stmt = insert(AppSettingsRow).values(key=key, value=value, updated_at=now)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[AppSettingsRow.key],
+                set_={"value": value, "updated_at": now},
+            )
+            await session.execute(stmt)
 
 
 def _has_rule_profile(stored: dict[str, Any]) -> bool:

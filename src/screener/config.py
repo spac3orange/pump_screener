@@ -104,6 +104,10 @@ class SystemSettings(BaseSettings):
 
     bybit_rest_base: str = "https://api.bybit.com"
     bybit_ws_linear: str = "wss://stream.bybit.com/v5/public/linear"
+    binance_enabled: bool = True
+    binance_rest_base: str = "https://fapi.binance.com"
+    binance_ws_market: str = "wss://fstream.binance.com/market/stream?streams=!ticker@arr"
+    binance_kline_concurrency: int = Field(default=4, ge=1, le=20)
     ws_symbols_per_connection: int = Field(default=100, ge=10, le=500)
     instrument_refresh_sec: int = Field(default=300, ge=30)
     # Connection watchdog: no frame (data or pong) for this long => reconnect.

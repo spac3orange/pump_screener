@@ -360,6 +360,35 @@ async def test_timeout_reconciles_without_second_create() -> None:
     assert gw.place_calls == 1
 
 
+def test_enqueue_ignores_non_bybit_signals() -> None:
+    svc = TradingService(_settings(), FakeRepo(), gateway=FakeGateway())  # type: ignore[arg-type]
+    svc._ready = True
+    svc._enabled = True
+    match = RuleMatch(
+        signal_type=SignalType.PUMP,
+        interval_sec=720,
+        threshold_pct=40,
+        change_pct=45,
+        prev_price=100,
+        price=145,
+        detected_ts_ms=int(datetime.now(UTC).timestamp() * 1000),
+        history_quality=HistoryQuality.LIVE,
+    )
+    sig = MarketSignal(
+        symbol="BTCUSDT",
+        direction=Direction.UP,
+        primary=match,
+        matches=(match,),
+        detected_at=datetime.now(UTC),
+        rule_version="test",
+        exchange="binance",
+    )
+    svc.enqueue(sig)
+    assert svc._queue.empty()
+    assert metrics.trade_signals_foreign_exchange_total == 1
+    assert metrics.trade_signals_received_total == 0
+
+
 @pytest.mark.asyncio
 async def test_dispatch_enqueues_without_blocking() -> None:
 

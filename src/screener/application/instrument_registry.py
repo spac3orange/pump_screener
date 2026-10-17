@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from typing import Any
 
 import httpx
 
@@ -16,19 +17,39 @@ from screener.logging import log
 logger = logging.getLogger(__name__)
 
 OnChange = Callable[[list[Instrument], set[str], set[str]], Awaitable[None]]
+FetchInstruments = Callable[[], Awaitable[list[dict[str, Any]]]]
 
 
 class InstrumentRegistry:
+    """Tradable universe of one exchange (Bybit by default).
+
+    Another exchange plugs in its own ``fetch``/``accept``/``mapper`` and a
+    ``stats`` object for its counters.
+    """
+
     def __init__(
         self,
-        rest: BybitRestClient,
+        rest: BybitRestClient | None,
         *,
         refresh_sec: int = 300,
         exclude_symbols: set[str] | None = None,
         on_change: OnChange | None = None,
         instrument_sink: object | None = None,
+        fetch: FetchInstruments | None = None,
+        accept: Callable[[dict[str, Any]], bool] = is_crypto_usdt_linear_perpetual,
+        mapper: Callable[[dict[str, Any]], Instrument] = map_instrument,
+        stats: Any = None,
+        exchange: str = "bybit",
     ) -> None:
         self._rest = rest
+        if fetch is None:
+            assert rest is not None, "rest or fetch is required"
+            fetch = rest.fetch_linear_instruments
+        self._fetch = fetch
+        self._accept = accept
+        self._mapper = mapper
+        self._stats = stats if stats is not None else metrics
+        self.exchange = exchange
         self._refresh_sec = refresh_sec
         self._exclude_symbols = {s.upper() for s in (exclude_symbols or set())}
         self._on_change = on_change
@@ -36,6 +57,10 @@ class InstrumentRegistry:
         self._instruments: dict[str, Instrument] = {}
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+
+    @property
+    def _log_prefix(self) -> str:
+        return "" if self.exchange == "bybit" else f"[{self.exchange}] "
 
     @property
     def symbols(self) -> list[str]:
@@ -58,7 +83,7 @@ class InstrumentRegistry:
         )
         await self.refresh()
         self._stop.clear()
-        self._task = asyncio.create_task(self._loop(), name="instrument-registry")
+        self._task = asyncio.create_task(self._loop(), name=f"instrument-registry-{self.exchange}")
 
     async def stop(self) -> None:
         self._stop.set()
@@ -87,7 +112,7 @@ class InstrumentRegistry:
         started = time.perf_counter()
         previous = len(self._instruments)
         try:
-            raw_list = await self._rest.fetch_linear_instruments()
+            raw_list = await self._fetch()
         except httpx.TimeoutException as exc:
             metrics.record_error()
             log(
@@ -117,7 +142,8 @@ class InstrumentRegistry:
             log(
                 logger,
                 logging.ERROR,
-                f"Instrument refresh failed; keeping previous universe ({previous} symbols)",
+                f"{self._log_prefix}Instrument refresh failed; "
+                f"keeping previous universe ({previous} symbols)",
                 component="registry",
                 event="refresh_failed",
                 count=previous,
@@ -126,10 +152,9 @@ class InstrumentRegistry:
             return
 
         filtered = [
-            map_instrument(raw)
+            self._mapper(raw)
             for raw in raw_list
-            if is_crypto_usdt_linear_perpetual(raw)
-            and str(raw.get("symbol", "")).upper() not in self._exclude_symbols
+            if self._accept(raw) and str(raw.get("symbol", "")).upper() not in self._exclude_symbols
         ]
         new_map = {i.symbol: i for i in filtered}
         old_symbols = set(self._instruments)
@@ -137,7 +162,7 @@ class InstrumentRegistry:
         added = new_symbols - old_symbols
         removed = old_symbols - new_symbols
         self._instruments = new_map
-        metrics.instruments_active = len(self._instruments)
+        self._stats.instruments_active = len(self._instruments)
         duration_ms = round((time.perf_counter() - started) * 1000, 1)
 
         sink = self._instrument_sink
@@ -158,7 +183,7 @@ class InstrumentRegistry:
             log(
                 logger,
                 logging.INFO,
-                f"Universe updated: total={len(new_symbols)} added={len(added)} "
+                f"{self._log_prefix}Universe updated: total={len(new_symbols)} added={len(added)} "
                 f"removed={len(removed)} duration_ms={duration_ms}",
                 component="registry",
                 event="universe_updated",

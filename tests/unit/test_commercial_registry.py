@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from screener.application.commercial.registry import ActiveUserRegistry, UserEntry
 from screener.domain.commercial import UserRole
+from screener.domain.exchanges import BINANCE, BYBIT
 from tests.helpers import settings
 
 NOW = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
@@ -59,6 +60,17 @@ async def test_access_change_without_regroup_does_not_recompile() -> None:
     await asyncio.sleep(0.03)
     assert len(compiled) == n
     assert reg.get(1).access_until == NOW + timedelta(days=30)
+
+
+def test_groups_for_keeps_only_members_of_that_exchange() -> None:
+    reg = ActiveUserRegistry()
+    until = NOW + timedelta(hours=1)
+    bybit_only = UserEntry(1, 10, UserRole.USER, until, A.config_hash(), frozenset({BYBIT}))
+    both = UserEntry(2, 20, UserRole.USER, until, A.config_hash(), frozenset({BYBIT, BINANCE}))
+    other = UserEntry(3, 30, UserRole.USER, until, B.config_hash(), frozenset({BINANCE}))
+    reg.replace_all([(bybit_only, A), (both, A), (other, B)])
+    assert set(reg.groups_for(BYBIT)) == {A.config_hash()}
+    assert set(reg.groups_for(BINANCE)) == {A.config_hash(), B.config_hash()}
 
 
 def test_has_access_uses_real_time() -> None:

@@ -8,6 +8,19 @@ from screener.infrastructure.telegram.formatter import (
 )
 from tests.helpers import T0, make_signal
 
+
+def test_binance_ticker_link_and_message() -> None:
+    assert ticker_link("BTCUSDT", "binance") == (
+        '<a href="https://www.binance.com/en/futures/BTCUSDT">BTC</a>'
+    )
+    signal = make_signal(SignalType.PUMP, 180, 5.0, symbol="ETHUSDT", exchange="binance")
+    text = format_signal_message(signal, signals_24h=3)
+    assert text.startswith(
+        '<a href="https://www.binance.com/">Binance</a> – 3M – '
+        '<a href="https://www.binance.com/en/futures/ETHUSDT">ETH</a>'
+    )
+    assert "🔉 Signal 24h: 3" in text
+
 BYBIT = '<a href="https://www.bybit.com/">ByBit</a>'
 
 

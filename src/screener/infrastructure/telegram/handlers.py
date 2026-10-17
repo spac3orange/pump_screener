@@ -15,6 +15,7 @@ from screener.application.profiles import ProfileService
 from screener.application.trading.lifecycle import PositionLifecycleService
 from screener.application.trading.service import AccountStatsView, TradingService
 from screener.config import ScreenerSettings
+from screener.domain.exchanges import BINANCE, BYBIT, exchanges_label, toggle_exchange
 from screener.domain.profiles import ProfileError, ProfileNameTaken, normalize_profile_name
 from screener.infrastructure.telegram.help_text import build_help_messages
 from screener.infrastructure.telegram.keyboards import (
@@ -194,17 +195,28 @@ def _settings_text(settings: ScreenerSettings, profile_name: str | None = None) 
     return "\n".join(lines)
 
 
+def _binance_available(state: AppState) -> bool:
+    return BINANCE in getattr(state, "feeds", {})
+
+
 def _settings_screen(state: AppState) -> tuple[str, InlineKeyboardMarkup]:
     settings = state.signal_engine.settings
     name = state.active_profile_name if state.profiles is not None else None
-    return _settings_text(settings, name), settings_keyboard(settings)
+    chosen = frozenset(state.admin_exchanges)
+    text = _settings_text(settings, name)
+    text += f"\nБиржи: {exchanges_label(chosen)}"
+    if BYBIT not in chosen:
+        text += "\n<i>Bybit OFF: уведомления админу выключены, движок и торговля работают.</i>"
+    return text, settings_keyboard(
+        settings, chosen, binance_available=_binance_available(state)
+    )
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: AppState) -> None:
     await message.answer(
         "<b>Bybit Market Screener</b>\n"
-        "Мониторинг crypto USDT Linear Perpetual: лонг, шорт и дамп.\n\n"
+        "Мониторинг crypto USDT Linear Perpetual на Bybit и Binance: лонг, шорт и дамп.\n\n"
         "Команды:\n"
         "/status — состояние\n"
         "/settings — настройки активного профиля\n"
@@ -231,6 +243,20 @@ async def cmd_help(message: Message, state: AppState) -> None:
         await message.answer(part)
 
 
+def _feeds_status(snap: dict) -> str:
+    feeds = snap.get("feeds") or {}
+    if not feeds:
+        return ""
+    lines = []
+    for name, data in feeds.items():
+        lines.append(
+            f"{name}: instr={data.get('instruments_active', 0)} "
+            f"ws={data.get('ws_connections', 0)} "
+            f"age_ms={data.get('last_message_age_ms')} ready={data.get('ready')}"
+        )
+    return "Feeds:\n" + "\n".join(lines) + "\n"
+
+
 @router.message(Command("status"))
 async def cmd_status(message: Message, state: AppState) -> None:
     snap = metrics.snapshot()
@@ -254,6 +280,7 @@ async def cmd_status(message: Message, state: AppState) -> None:
         f"Reconnects: {snap['ws_reconnects']}, gaps: {snap['history_gaps_total']}\n"
         f"p95 ms: {snap['pipeline_latency_ms']['p95']}\n"
         f"Last msg age ms: {snap['last_message_age_ms']}\n"
+        f"{_feeds_status(snap)}"
         f"Admin IDs: <code>{admins}</code>"
     )
 
@@ -272,7 +299,8 @@ async def cmd_signals(message: Message, state: AppState) -> None:
         return
     lines = [
         f"{row.detected_at.strftime('%H:%M:%S')} <b>{row.signal_type}</b> "
-        f"{row.symbol} {row.change_pct:+.2f}% / {row.interval_sec // 60}m"
+        f"{getattr(row, 'exchange', 'bybit')} {row.symbol} {row.change_pct:+.2f}% / "
+        f"{row.interval_sec // 60}m"
         f"{_signal_profile_suffix(row.payload)}"
         for row in rows
     ]
@@ -326,7 +354,8 @@ async def cmd_admin_stats(message: Message, state: AppState) -> None:
         f"отправлено сообщений: {snap['user_messages_sent_total']}\n"
         f"Доставки: {', '.join(f'{k}={v}' for k, v in sorted(deliveries.items())) or '—'}\n"
         f"Flood waits: {snap['user_flood_waits_total']}, "
-        f"writer backlog: {rt.writer.backlog}"
+        f"writer backlog: {rt.writer.backlog}\n"
+        f"{_feeds_status(snap)}"
     )
 
 
@@ -425,6 +454,24 @@ async def on_trading_action(query: CallbackQuery, state: AppState) -> None:
         return
 
     await query.answer("Неизвестное действие", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("ex:"))
+async def on_toggle_exchange(query: CallbackQuery, state: AppState) -> None:
+    assert query.data is not None
+    code = query.data.split(":", 1)[1]
+    nxt = toggle_exchange(frozenset(state.admin_exchanges), code)
+    if nxt is None:
+        await query.answer(
+            "Нельзя выключить последнюю биржу. Все сигналы выключаются выключением мониторинга.",
+            show_alert=True,
+        )
+        return
+    await state.set_admin_exchanges(set(nxt))
+    if query.message is not None:
+        text, markup = _settings_screen(state)
+        await query.message.edit_text(text, reply_markup=markup)
+    await query.answer("Обновлено")
 
 
 @router.callback_query(F.data.startswith("toggle:"))

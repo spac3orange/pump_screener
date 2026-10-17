@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from screener.application.commercial.payment_service import InvoiceError, SubscriptionChangeError
 from screener.application.commercial.trial_service import TrialResult
 from screener.domain.commercial import UserAccount, UserDetectionConfig
+from screener.domain.exchanges import BINANCE, toggle_exchange
 from screener.infrastructure.telegram import commercial_texts as texts
 from screener.infrastructure.telegram.settings_input import (
     FIELDS,
@@ -59,6 +60,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 USER_EDIT = "us"
+
+
+def _binance_available(state: AppState) -> bool:
+    return BINANCE in getattr(state, "feeds", {})
+
+
+def _settings_view(account: UserAccount, cfg: UserDetectionConfig, state: AppState):
+    exchanges = account.enabled_exchanges
+    return texts.settings_text(cfg, exchanges), user_settings_keyboard(
+        cfg, exchanges, binance_available=_binance_available(state)
+    )
 
 
 class HasAccount(Filter):
@@ -109,10 +121,13 @@ async def u_account(message: Message, account: UserAccount, commercial: Commerci
 
 
 @user_router.message(Command("settings"))
-async def u_settings(message: Message, account: UserAccount, commercial: CommercialRuntime) -> None:
+async def u_settings(
+    message: Message, account: UserAccount, commercial: CommercialRuntime, state: AppState
+) -> None:
     cfg = await commercial.users.get_config(account.id)
+    text, markup = _settings_view(account, cfg, state)
     await message.answer(texts.SETTINGS_INTRO_TEXT)
-    await message.answer(texts.settings_text(cfg), reply_markup=user_settings_keyboard(cfg))
+    await message.answer(text, reply_markup=markup)
 
 
 @user_router.message(Command("subscription"))
@@ -295,9 +310,8 @@ async def u_settings_action(
         cfg = await users.get_config(account.id)
         if isinstance(query.message, Message):
             await query.message.answer(texts.SETTINGS_INTRO_TEXT)
-            await query.message.answer(
-                texts.settings_text(cfg), reply_markup=user_settings_keyboard(cfg)
-            )
+            body, markup = _settings_view(account, cfg, state)
+            await query.message.answer(body, reply_markup=markup)
         await query.answer()
         return
 
@@ -305,7 +319,23 @@ async def u_settings_action(
         cfg = await users.get_config(account.id)
         updated = toggle_rule(cfg, parts[2])
         await users.update_config(account, updated)
-        await _edit(query, texts.settings_text(updated), user_settings_keyboard(updated))
+        body, markup = _settings_view(account, updated, state)
+        await _edit(query, body, markup)
+        await query.answer("Обновлено")
+        return
+
+    if action == "x" and len(parts) == 3:
+        nxt = toggle_exchange(account.enabled_exchanges, parts[2])
+        if nxt is None:
+            await query.answer(
+                "Нельзя выключить последнюю биржу. Все сигналы выключаются в /account.",
+                show_alert=True,
+            )
+            return
+        account = await users.set_exchanges(account, nxt) or account
+        cfg = await users.get_config(account.id)
+        body, markup = _settings_view(account, cfg, state)
+        await _edit(query, body, markup)
         await query.answer("Обновлено")
         return
 
@@ -334,7 +364,8 @@ async def u_settings_action(
 
     if action == "reset_ok":
         cfg = await users.reset_config(account)
-        await _edit(query, texts.settings_text(cfg), user_settings_keyboard(cfg))
+        body, markup = _settings_view(account, cfg, state)
+        await _edit(query, body, markup)
         await query.answer("Настройки сброшены")
         return
 
@@ -351,7 +382,7 @@ async def u_menu_button(
     if message.text == MENU_ACCOUNT:
         await u_account(message, account, commercial)
     elif message.text == MENU_SETTINGS:
-        await u_settings(message, account, commercial)
+        await u_settings(message, account, commercial, state)
     elif message.text == MENU_HELP:
         await u_help(message, commercial)
     else:
@@ -383,7 +414,8 @@ async def u_setting_value(
         return
     state.clear_pending_edit(message.from_user.id)
     await users.update_config(account, new_cfg)
-    await message.answer(texts.settings_text(new_cfg), reply_markup=user_settings_keyboard(new_cfg))
+    body, markup = _settings_view(account, new_cfg, state)
+    await message.answer(body, reply_markup=markup)
 
 
 @user_router.message(F.text.startswith("/"))

@@ -157,14 +157,17 @@ class UserDispatcher:
         members = self._registry.members(signal.group_key)
         if not members:
             return 0
-        recent_key = f"{signal.group_key}:{signal.symbol}"
+        recent_key = f"{signal.group_key}:{signal.exchange}:{signal.symbol}"
         self._recent.record(recent_key, signal.detected_at)
         text = self._format(signal, self._recent.count(recent_key, signal.detected_at))
         now = self._clock.now()
         queued = 0
         for user_id in members:
-            if not self._registry.has_access(user_id, now):
+            entry = self._registry.get(user_id)
+            if entry is None or not self._registry.has_access(user_id, now):
                 self._record(user_id, signal, DeliveryOutcome.DROPPED_ACCESS, "no_access", 0, now)
+                continue
+            if signal.exchange not in entry.exchanges:
                 continue
             q = self._queues.get(user_id)
             if q is None:

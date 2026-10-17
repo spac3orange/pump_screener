@@ -65,6 +65,17 @@ def test_old_cs_delta_ignored() -> None:
     assert proc.get_state("BTCUSDT").last_price == 100.0  # type: ignore[union-attr]
 
 
+def test_normalize_klines_already_ascending_binance() -> None:
+    now_ms = 1_700_000_180_000
+    rows = [
+        ["1700000040000", "1", "1", "1", "1.0"],
+        ["1700000100000", "1", "1", "1", "2.0"],
+        ["1700000160000", "1", "1", "1", "3.0"],
+    ]
+    closes = normalize_klines(rows, now_ms=now_ms)
+    assert closes == [(1_700_000_099, 1.0), (1_700_000_159, 2.0)]
+
+
 def test_normalize_klines_ascending_and_drops_open_candle() -> None:
     now_ms = 1_700_000_180_000
     rows = [

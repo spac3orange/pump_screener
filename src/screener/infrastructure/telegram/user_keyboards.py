@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from screener.application.commercial.user_service import AccountView
 from screener.config import CommercialSettings
 from screener.domain.commercial import AccessKind, UserDetectionConfig
+from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, EXCHANGES
 
 USER_SETTINGS = "us"
 USER_ACTION = "ua"
@@ -104,8 +105,14 @@ def pay_keyboard(link: str, settings: CommercialSettings) -> InlineKeyboardMarku
     )
 
 
-def user_settings_keyboard(cfg: UserDetectionConfig) -> InlineKeyboardMarkup:
+def user_settings_keyboard(
+    cfg: UserDetectionConfig,
+    exchanges: frozenset[str] | None = None,
+    *,
+    binance_available: bool = True,
+) -> InlineKeyboardMarkup:
     p = USER_SETTINGS
+    chosen = exchanges if exchanges is not None else frozenset(ALL_EXCHANGES)
     rows = [
         [
             _btn(f"Лонг {_flag(cfg.enable_long)}", f"{p}:t:long"),
@@ -116,6 +123,14 @@ def user_settings_keyboard(cfg: UserDetectionConfig) -> InlineKeyboardMarkup:
         [_btn("🔴 Период шорт", f"{p}:s:short:period"), _btn("➗ % шорт", f"{p}:s:short:pct")],
         [_btn("🔻 Период дамп", f"{p}:s:dump:period"), _btn("➗ % дамп", f"{p}:s:dump:pct")],
         [_btn("💧 Мин. оборот 24ч", f"{p}:s:turnover:value")],
+        [
+            _btn(
+                f"{EXCHANGES[code].label} {_flag(code in chosen)}",
+                f"{p}:x:{code}",
+            )
+            for code in ALL_EXCHANGES
+            if code != BINANCE or binance_available
+        ],
         [_btn("↩️ Сбросить по умолчанию", f"{p}:reset")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)

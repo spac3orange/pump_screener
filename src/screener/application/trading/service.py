@@ -147,6 +147,11 @@ class TradingService:
         self._position_listener = listener
 
     def enqueue(self, signal: MarketSignal) -> None:
+        from screener.domain.exchanges import TRADING_EXCHANGE
+
+        if getattr(signal, "exchange", TRADING_EXCHANGE) != TRADING_EXCHANGE:
+            metrics.trade_signals_foreign_exchange_total += 1
+            return
         if not self.settings.enabled_module:
             return
         metrics.trade_signals_received_total += 1

@@ -15,7 +15,9 @@ class _SlowDb:
         self.saved: list = []
         self.deliveries: list = []
 
-    async def count_symbol_signals_24h(self, symbol, *, now, exclude_id=None) -> int:
+    async def count_symbol_signals_24h(
+        self, symbol, *, now, exclude_id=None, exchange="bybit"
+    ) -> int:
         await asyncio.sleep(10)
         return 0
 
@@ -30,7 +32,9 @@ class _GoodDb:
     def __init__(self) -> None:
         self.order: list[str] = []
 
-    async def count_symbol_signals_24h(self, symbol, *, now, exclude_id=None) -> int:
+    async def count_symbol_signals_24h(
+        self, symbol, *, now, exclude_id=None, exchange="bybit"
+    ) -> int:
         return 2
 
     async def save_signal(self, signal) -> None:

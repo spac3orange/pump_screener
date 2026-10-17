@@ -10,6 +10,7 @@ from aiogram.types import User as TgUser
 from screener.application.commercial.user_service import AccountView
 from screener.config import CommercialSettings
 from screener.domain.commercial import AccessKind, UserAccount, UserDetectionConfig
+from screener.domain.exchanges import exchanges_label
 
 PRODUCT = "PumpScreener"
 
@@ -55,7 +56,7 @@ def rules_text(cfg: UserDetectionConfig) -> str:
 
 def welcome_text(settings: CommercialSettings, *, terms_needed: bool, trial: bool) -> str:
     lines = [
-        f"<b>{PRODUCT}</b> — сигналы о резких движениях цены на Bybit "
+        f"<b>{PRODUCT}</b> — сигналы о резких движениях цены на Bybit и Binance "
         "(USDT Perpetual) по вашим правилам.",
         "",
         "Вы сами задаёте процент и период для лонга, шорта и дампа в /settings.",
@@ -114,8 +115,11 @@ SETTINGS_INTRO_TEXT = (
 )
 
 
-def settings_text(cfg: UserDetectionConfig) -> str:
-    return f"<b>Мои настройки сигналов</b>\n{rules_text(cfg)}"
+def settings_text(cfg: UserDetectionConfig, exchanges: frozenset[str] | None = None) -> str:
+    lines = ["<b>Мои настройки сигналов</b>", rules_text(cfg)]
+    if exchanges is not None:
+        lines.append(f"Биржи: {exchanges_label(exchanges)}")
+    return "\n".join(lines)
 
 
 def subscription_text(view: AccountView, settings: CommercialSettings) -> str:
@@ -181,7 +185,7 @@ def paysupport_text(settings: CommercialSettings) -> str:
 def help_text(settings: CommercialSettings) -> str:
     return (
         f"<b>{PRODUCT} — справка</b>\n\n"
-        "Бот следит за всеми USDT Perpetual на Bybit и присылает сигнал, когда цена "
+        "Бот следит за USDT Perpetual на Bybit и Binance и присылает сигнал, когда цена "
         "меняется на заданный процент за заданный период:\n"
         "🟢 <b>Лонг</b> — рост на X% за N минут\n"
         "🔴 <b>Шорт</b> — падение на X% за N минут\n"

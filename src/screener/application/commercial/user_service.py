@@ -26,6 +26,7 @@ from screener.domain.commercial import (
     UserRole,
     UserStatus,
 )
+from screener.domain.exchanges import ALL_EXCHANGES, normalize_exchanges
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class UserStore(Protocol):
     async def sync_admin_roles(self, admin_telegram_ids: Any) -> None: ...
     async def get_user(self, user_id: int) -> UserAccount | None: ...
     async def set_monitoring(self, user_id: int, enabled: bool, now: Any) -> None: ...
+    async def set_exchanges(self, user_id: int, exchanges: Any, now: Any) -> None: ...
     async def accept_terms(self, user_id: int, version: str, now: Any) -> None: ...
     async def mark_bot_blocked(self, user_id: int, now: Any) -> None: ...
     async def get_template(self, code: str) -> tuple[dict[str, Any], int, str] | None: ...
@@ -184,6 +186,15 @@ class UserService:
         await self._store.set_monitoring(user.id, enabled, self._clock.now())
         return await self.refresh(user.id)
 
+    async def set_exchanges(
+        self, user: UserAccount, exchanges: frozenset[str]
+    ) -> UserAccount | None:
+        chosen = normalize_exchanges(exchanges)
+        if not chosen:
+            chosen = frozenset(ALL_EXCHANGES)
+        await self._store.set_exchanges(user.id, sorted(chosen), self._clock.now())
+        return await self.refresh(user.id)
+
     async def accept_terms(self, user: UserAccount) -> UserAccount | None:
         await self._store.accept_terms(user.id, self._settings.terms_version, self._clock.now())
         return await self._store.get_user(user.id)
@@ -264,6 +275,7 @@ class UserService:
             role=user.role,
             access_until=user.access_until,
             group_key=settings.config_hash(),
+            exchanges=user.enabled_exchanges,
         )
         return entry, settings
 
@@ -285,6 +297,7 @@ class UserService:
             and current.chat_id == user.chat_id
             and current.role is user.role
             and current.access_until == user.access_until
+            and current.exchanges == user.enabled_exchanges
         ):
             return
         if cfg is None:

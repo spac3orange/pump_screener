@@ -16,6 +16,7 @@ from screener.application.commercial.access import has_access
 from screener.application.metrics import metrics
 from screener.config import ScreenerSettings
 from screener.domain.commercial import UserRole
+from screener.domain.exchanges import ALL_EXCHANGES
 
 GroupsListener = Callable[[dict[str, ScreenerSettings]], None]
 
@@ -27,6 +28,7 @@ class UserEntry:
     role: UserRole
     access_until: datetime | None
     group_key: str
+    exchanges: frozenset[str] = frozenset(ALL_EXCHANGES)
 
 
 class ActiveUserRegistry:
@@ -61,6 +63,11 @@ class ActiveUserRegistry:
     def groups(self) -> dict[str, ScreenerSettings]:
         return {key: self._settings[key] for key in self._members}
 
+    def groups_for(self, exchange: str) -> dict[str, ScreenerSettings]:
+        """Groups that have at least one member with ``exchange`` enabled."""
+        keys = {entry.group_key for entry in self._users.values() if exchange in entry.exchanges}
+        return {key: self._settings[key] for key in keys if key in self._members}
+
     def replace_all(self, items: Iterable[tuple[UserEntry, ScreenerSettings]]) -> None:
         self._users.clear()
         self._members.clear()
@@ -74,10 +81,11 @@ class ActiveUserRegistry:
         if current == entry:
             return
         regroup = current is None or current.group_key != entry.group_key
+        exchanges_changed = current is not None and current.exchanges != entry.exchanges
         if current is not None:
             self._discard(current)
         self._add(entry, settings)
-        if regroup:
+        if regroup or exchanges_changed:
             self._schedule()
         self._update_metrics()
 

@@ -200,3 +200,77 @@ class Workload:
             "evals": metrics.engine_evaluations_total,
             "lookups": metrics.history_lookups_total,
         }
+
+
+@dataclass
+class DualWorkload:
+    """Bybit ticker stream plus synthetic Binance ``!ticker@arr`` frames."""
+
+    bybit_symbols: int = 500
+    binance_symbols: int = 523
+    seed: int = 1
+    settings: ScreenerSettings = field(
+        default_factory=lambda: ScreenerSettings(min_turnover_24h_usdt=0)
+    )
+
+    def __post_init__(self) -> None:
+        from screener.application.binance_processor import BinanceTickerProcessor
+
+        self.bybit = Workload(self.bybit_symbols, seed=self.seed, settings=self.settings)
+        self.binance_names = [f"B{i}USDT" for i in range(self.binance_symbols)]
+        self.binance_history = PriceHistoryManager()
+        self.binance_proc = BinanceTickerProcessor(
+            metrics.feed("binance"), self.binance_history
+        )
+        self.binance_proc.set_universe(self.binance_names)
+        self.binance_engine = SignalEngine(self.binance_history, self.settings)
+        self.binance_prices = [1.0 + self.bybit.rnd.random() for _ in range(self.binance_symbols)]
+        self.binance_seeded = False
+        self.binance_frames = 0
+        self.binance_pipeline_sec = 0.0
+
+    def snapshot_all(self) -> None:
+        self.bybit.snapshot_all()
+        self._binance_frame(seed=True)
+
+    def prefill_history(self) -> None:
+        self.bybit.prefill_history()
+        cap = self.binance_history.capacity_sec
+        sec = self.bybit.sec
+        for i, name in enumerate(self.binance_names):
+            self.binance_history.backfill_klines(
+                name, [(sec - cap + 5, self.binance_prices[i])], hi_sec=sec - 1
+            )
+
+    def step_second(self, *, keep_samples: bool = True) -> None:
+        self.bybit.step_second(keep_samples=keep_samples)
+        self._binance_frame(seed=False)
+
+    def _binance_frame(self, *, seed: bool) -> None:
+        rnd = self.bybit.rnd
+        ts_ms = self.bybit.sec * 1000
+        n = self.binance_symbols if seed else min(220, self.binance_symbols)
+        items = []
+        for _ in range(n):
+            i = rnd.randrange(self.binance_symbols)
+            if seed or rnd.random() < 0.15:
+                self.binance_prices[i] *= 1.0 + (rnd.random() - 0.5) * 0.002
+            items.append(
+                {
+                    "s": self.binance_names[i],
+                    "E": ts_ms + i,
+                    "c": f"{self.binance_prices[i]:.6f}",
+                    "q": "50000000",
+                    "v": "1000000",
+                }
+            )
+        start = time.perf_counter()
+        events = self.binance_proc.apply_message({"data": items}, mono=start)
+        for event in events or []:
+            self.binance_history.record(
+                event.symbol, ts_ms=event.exchange_ts_ms, price=event.last_price
+            )
+            if event.kind.name == "LIVE":
+                self.binance_engine.evaluate(event)
+        self.binance_pipeline_sec += time.perf_counter() - start
+        self.binance_frames += 1

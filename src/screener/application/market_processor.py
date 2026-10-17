@@ -14,9 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_klines(rows: list[list[str]], *, now_ms: int) -> list[tuple[int, float]]:
-    """Bybit 1m klines (newest first) -> ascending ``(close_sec, close)``.
+    """1m klines -> ascending ``(close_sec, close)``.
 
-    The still-open candle is dropped: its close is not a settled price.
+    Accepts Bybit (newest first) and Binance (oldest first) rows: both carry
+    the open time in ``row[0]`` and the close in ``row[4]``. The still-open
+    candle is dropped: its close is not a settled price.
     """
     out: list[tuple[int, float]] = []
     for row in rows:

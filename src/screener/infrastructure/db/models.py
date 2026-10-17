@@ -22,7 +22,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -33,6 +33,7 @@ class Base(DeclarativeBase):
 class InstrumentRow(Base):
     __tablename__ = "instruments"
 
+    exchange: Mapped[str] = mapped_column(String(16), primary_key=True, default="bybit")
     symbol: Mapped[str] = mapped_column(String(64), primary_key=True)
     contract_type: Mapped[str] = mapped_column(String(64), default="")
     status: Mapped[str] = mapped_column(String(32), default="")
@@ -55,6 +56,7 @@ class SignalRow(Base):
     __tablename__ = "signals"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exchange: Mapped[str] = mapped_column(String(16), nullable=False, server_default="bybit")
     symbol: Mapped[str] = mapped_column(String(64), nullable=False)
     signal_type: Mapped[str] = mapped_column(String(32), nullable=False)
     interval_sec: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -80,6 +82,7 @@ class SignalRow(Base):
 
     __table_args__ = (
         Index("ix_signals_detected_at", "detected_at"),
+        Index("ix_signals_exchange_symbol_detected", "exchange", "symbol", "detected_at"),
         Index("ix_signals_symbol_type_detected", "symbol", "signal_type", "detected_at"),
         Index("ix_signals_type_detected", "signal_type", "detected_at"),
         Index("ix_signals_profile_version", "monitoring_profile_version_id"),
@@ -313,6 +316,11 @@ class UserRow(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    enabled_exchanges: Mapped[list[str]] = mapped_column(
+        ARRAY(Text),
+        nullable=False,
+        server_default=text("ARRAY['bybit','binance']::text[]"),
+    )
 
 
 class UserProfileTemplateRow(Base):
@@ -460,6 +468,7 @@ class CommercialSignalRow(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     group_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    exchange: Mapped[str] = mapped_column(String(16), nullable=False, server_default="bybit")
     symbol: Mapped[str] = mapped_column(String(64), nullable=False)
     signal_type: Mapped[str] = mapped_column(String(32), nullable=False)
     interval_sec: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -468,6 +477,25 @@ class CommercialSignalRow(Base):
     prev_price: Mapped[float] = mapped_column(Float, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_commercial_signals_exchange_symbol_detected",
+            "exchange",
+            "symbol",
+            "detected_at",
+        ),
+    )
+
+
+class AppSettingsRow(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class UserSignalEventRow(Base):

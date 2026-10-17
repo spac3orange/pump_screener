@@ -16,6 +16,7 @@ from screener.application.signal_engine import SignalEngine
 from screener.application.trading.lifecycle import PositionLifecycleService
 from screener.application.trading.service import TradingService
 from screener.config import ScreenerSettings, SystemSettings, TradingSettings
+from screener.domain.exchanges import ALL_EXCHANGES
 from screener.domain.models import MarketSignal
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
@@ -51,16 +52,26 @@ class AppState:
     lifecycle: PositionLifecycleService | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     commercial: CommercialRuntime | None = None
+    admin_exchanges: set[str] = field(default_factory=lambda: set(ALL_EXCHANGES))
+    feeds: dict[str, Any] = field(default_factory=dict)
     # telegram user_id -> (kind, field, monotonic deadline); bounded and expiring because
     # subscribers can open prompts too.
     pending_edits: dict[int, tuple[str, str, float]] = field(default_factory=dict)
 
     def dispatch_signal(self, signal: MarketSignal) -> None:
-        """Hand a MarketSignal to persistence, Telegram, and optional trading."""
+        """Bybit MarketSignal: persistence, Telegram (if the exchange is on), trading."""
+        self._dispatch(signal, to_trading=True)
+
+    def dispatch_monitor_signal(self, signal: MarketSignal) -> None:
+        """Non-Bybit MarketSignal: persistence and Telegram only; never trading."""
+        self._dispatch(signal, to_trading=False)
+
+    def _dispatch(self, signal: MarketSignal, *, to_trading: bool) -> None:
         log(
             logger,
             logging.DEBUG,
-            f"Dispatch signal {signal.symbol} {signal.signal_type.value} id={signal.id}",
+            f"Dispatch signal {signal.exchange} {signal.symbol} "
+            f"{signal.signal_type.value} id={signal.id}",
             component="app_state",
             event="dispatch_signal",
             symbol=signal.symbol,
@@ -68,9 +79,20 @@ class AppState:
             signal_type=signal.signal_type.value,
         )
         self.persistence.enqueue_signal(signal)
-        self.notifications.enqueue(signal)
-        if self.trading is not None:
+        if signal.exchange in self.admin_exchanges:
+            self.notifications.enqueue(signal)
+        if to_trading and self.trading is not None:
             self.trading.enqueue(signal)
+
+    async def set_admin_exchanges(self, exchanges: set[str]) -> None:
+        self.admin_exchanges = set(exchanges)
+        feed = self.feeds.get("binance")
+        if feed is not None:
+            feed.evaluate_admin = "binance" in self.admin_exchanges
+        if self.repo is not None:
+            await self.repo.set_app_setting(
+                "admin_exchanges", {"exchanges": sorted(exchanges)}
+            )
 
     def begin_setting_edit(self, user_id: int, kind: str, field_name: str) -> None:
         now = time.monotonic()
@@ -99,11 +121,22 @@ class AppState:
     def apply_profile(self, active: ActiveProfile, reset_dedup: bool) -> None:
         """Synchronous swap of the monitoring config (no await => no interleaved event)."""
         settings = active.settings
-        self.signal_engine.update_settings(
-            settings, context=active.context, reset_dedup=reset_dedup
-        )
-        self.correlator.window_ms = settings.correlation_window_ms
-        self.registry.set_exclude_symbols(settings.exclude_symbols)
+        engines = [self.signal_engine]
+        correlators = [self.correlator]
+        registries = [self.registry]
+        for feed in getattr(self, "feeds", {}).values():
+            if feed.signal_engine is not None and feed.signal_engine not in engines:
+                engines.append(feed.signal_engine)
+            if feed.correlator is not None and feed.correlator not in correlators:
+                correlators.append(feed.correlator)
+            if feed.registry is not None and feed.registry not in registries:
+                registries.append(feed.registry)
+        for engine in engines:
+            engine.update_settings(settings, context=active.context, reset_dedup=reset_dedup)
+        for correlator in correlators:
+            correlator.window_ms = settings.correlation_window_ms
+        for registry in registries:
+            registry.set_exclude_symbols(settings.exclude_symbols)
 
     @property
     def commercial_engine(self) -> MultiConfigEngine | None:

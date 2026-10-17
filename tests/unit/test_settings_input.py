@@ -28,8 +28,9 @@ def test_settings_keyboard_has_toggles_and_six_buttons() -> None:
     toggles = markup.inline_keyboard[0]
     assert [b.text for b in toggles] == ["Лонг ON", "Шорт OFF", "Дамп ON"]
     assert [b.callback_data for b in toggles] == ["toggle:long", "toggle:short", "toggle:dump"]
-    *rule_rows, nav = markup.inline_keyboard[1:]
+    *rule_rows, exchanges, nav = markup.inline_keyboard[1:]
     assert [b.callback_data for b in nav] == ["prof:list"]
+    assert [b.callback_data for b in exchanges] == ["ex:bybit", "ex:binance"]
     buttons = [button for row in rule_rows for button in row]
     assert [button.text for button in buttons] == [
         "🟢 Период лонг",

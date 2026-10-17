@@ -21,12 +21,24 @@ SendFunc = Callable[..., Awaitable[None]]
 
 class SignalCounter(Protocol):
     async def count_symbol_signals_24h(
-        self, symbol: str, *, now: datetime, exclude_id: UUID | None = None
+        self,
+        symbol: str,
+        *,
+        now: datetime,
+        exclude_id: UUID | None = None,
+        exchange: str = "bybit",
     ) -> int: ...
 
 
+def recent_key(symbol: str, exchange: str = "bybit") -> str:
+    return f"{exchange}:{symbol}"
+
+
 class RecentSignals:
-    """In-memory per-symbol signal timestamps for the last 24 hours."""
+    """In-memory per-symbol signal timestamps for the last 24 hours.
+
+    Keys are ``exchange:symbol`` so the same ticker on two exchanges does not mix.
+    """
 
     _SWEEP_EVERY = 256
 
@@ -101,8 +113,8 @@ class NotificationService:
     def set_chat_ids(self, chat_ids: Sequence[int]) -> None:
         self._chat_ids = list(chat_ids)
 
-    def forget_symbol(self, symbol: str) -> None:
-        self._recent.forget(symbol)
+    def forget_symbol(self, symbol: str, exchange: str = "bybit") -> None:
+        self._recent.forget(recent_key(symbol, exchange))
 
     async def start(self) -> None:
         self._tasks.append(supervise("notifications", self._loop))
@@ -111,7 +123,7 @@ class NotificationService:
         await cancel_tasks(self._tasks)
 
     def enqueue(self, signal: MarketSignal) -> None:
-        self._recent.record(signal.symbol, signal.detected_at)
+        self._recent.record(recent_key(signal.symbol, signal.exchange), signal.detected_at)
         if not self._chat_ids or self._send_func is None:
             return
         if self._queue.full():
@@ -133,13 +145,18 @@ class NotificationService:
                 self._queue.task_done()
 
     async def signals_24h(self, signal: MarketSignal) -> int:
-        in_memory = self._recent.count(signal.symbol, signal.detected_at)
+        in_memory = self._recent.count(
+            recent_key(signal.symbol, signal.exchange), signal.detected_at
+        )
         from_db = 0
         if self._counter is not None:
             try:
                 from_db = 1 + await asyncio.wait_for(
                     self._counter.count_symbol_signals_24h(
-                        signal.symbol, now=signal.detected_at, exclude_id=signal.id
+                        signal.symbol,
+                        now=signal.detected_at,
+                        exclude_id=signal.id,
+                        exchange=signal.exchange,
                     ),
                     timeout=self._count_timeout,
                 )

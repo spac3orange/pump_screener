@@ -125,6 +125,7 @@ async def env():
         trading=trading,  # type: ignore[arg-type]
         commercial=rt,
     )
+    state.feeds["binance"] = SimpleNamespace(evaluate_admin=True)
     detach_routers()
     svc = bot_module.TelegramBotService("123456:TEST-token", state)
     session = MockSession()
@@ -252,6 +253,28 @@ async def test_user_settings_edit_and_validation(env) -> None:
     assert cfg.long_threshold_pct == 7.5 and cfg.min_turnover_24h_usdt == 2_000_000
     await env.feed(_cb(ALICE, "us:reset_ok"))
     assert (await env.rt.users.get_config(user.id)).long_threshold_pct == 40.0
+
+
+async def test_user_cannot_disable_last_exchange(env) -> None:
+    await _onboard(env)
+    await env.feed(_cb(ALICE, "us:x:binance"))
+    user = await env.rt.repo.get_user_by_telegram(ALICE)
+    assert user.enabled_exchanges == frozenset({"bybit"})
+    await env.feed(_cb(ALICE, "us:x:bybit"))
+    user = await env.rt.repo.get_user_by_telegram(ALICE)
+    assert user.enabled_exchanges == frozenset({"bybit"})
+    alerts = [c.text for c in env.session.of(AnswerCallbackQuery) if c.text]
+    assert any("последнюю биржу" in t for t in alerts)
+
+
+async def test_admin_exchange_toggle_keeps_one_on(env) -> None:
+    await env.feed(_msg(ADMIN, "/settings"))
+    await env.feed(_cb(ADMIN, "ex:binance"))
+    assert env.svc._app_state.admin_exchanges == {"bybit"}
+    await env.feed(_cb(ADMIN, "ex:bybit"))
+    assert env.svc._app_state.admin_exchanges == {"bybit"}
+    alerts = [c.text for c in env.session.of(AnswerCallbackQuery) if c.text]
+    assert any("последнюю биржу" in t for t in alerts)
 
 
 async def _buy(env, uid: int = ALICE) -> str:

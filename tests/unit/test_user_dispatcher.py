@@ -48,9 +48,9 @@ class FakeSender:
         self.sent.append((chat_id, text))
 
 
-def _signal(symbol: str = "AUSDT", at: datetime = T0) -> GroupSignal:
+def _signal(symbol: str = "AUSDT", at: datetime = T0, exchange: str = "bybit") -> GroupSignal:
     m = RuleMatch(SignalType.PUMP, 60, 5.0, 6.0, 1.0, 1.06, 0, HistoryQuality.LIVE)
-    return GroupSignal(KEY, symbol, Direction.UP, m, (m,), at)
+    return GroupSignal(KEY, symbol, Direction.UP, m, (m,), at, exchange=exchange)
 
 
 def _setup(*, until=T0 + timedelta(hours=1), users=(1,), **cfg):
@@ -77,6 +77,25 @@ def _setup(*, until=T0 + timedelta(hours=1), users=(1,), **cfg):
         footer="\nPRO",
     )
     return dispatcher, registry, writer, sender, clock, blocked
+
+
+async def test_fanout_skips_users_who_disabled_the_exchange() -> None:
+    d, registry, writer, sender, _, _ = _setup(users=(1, 2))
+    registry.upsert(
+        UserEntry(1, 1001, UserRole.USER, T0 + timedelta(hours=1), KEY, frozenset({"bybit"})),
+        CFG,
+    )
+    registry.upsert(
+        UserEntry(
+            2, 1002, UserRole.USER, T0 + timedelta(hours=1), KEY, frozenset({"bybit", "binance"})
+        ),
+        CFG,
+    )
+    d.on_group_signal(_signal(exchange="binance"))
+    assert d.fanout_once() == 1
+    assert await d.send_next()
+    assert sender.sent == [(1002, "AUSDT#1\nPRO")]
+    assert writer.statuses(1) == [] and writer.statuses(2) == ["sent"]
 
 
 async def test_delivers_to_members_with_access_only() -> None:

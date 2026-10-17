@@ -11,9 +11,12 @@ from fastapi import FastAPI
 from alembic import command
 from bybit_client import BybitGateway, create_bybit_http
 from screener.app_state import AppState
+from screener.application.binance_processor import BinanceTickerProcessor
 from screener.application.correlator import SignalCorrelator
 from screener.application.instrument_registry import InstrumentRegistry
+from screener.application.market_feed import MarketFeed
 from screener.application.market_processor import MarketDataProcessor
+from screener.application.metrics import metrics
 from screener.application.notification_service import NotificationService
 from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
@@ -23,11 +26,21 @@ from screener.application.trading.service import TradingService
 from screener.commercial_runtime import CommercialRuntime, build_commercial
 from screener.config import (
     CommercialSettings,
+    ScreenerSettings,
     SystemSettings,
     get_commercial_settings,
     get_system_settings,
     get_trading_settings,
 )
+from screener.domain.exchanges import ALL_EXCHANGES, BINANCE, BYBIT, normalize_exchanges
+from screener.infrastructure.binance.mapping import (
+    is_crypto_usdt_perpetual,
+)
+from screener.infrastructure.binance.mapping import (
+    map_instrument as map_binance_instrument,
+)
+from screener.infrastructure.binance.rest import BinanceRestClient
+from screener.infrastructure.binance.ws import BinanceTickerStream
 from screener.infrastructure.bybit.lifecycle_runtime import TradeLifecycleRuntime
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
@@ -52,7 +65,7 @@ def run_migrations(database_url: str) -> None:
 
 async def build_runtime(
     system: SystemSettings,
-) -> tuple[AppState, MarketWorker, TelegramBotService | None]:
+) -> tuple[AppState, list[MarketWorker], TelegramBotService | None]:
     import asyncio
 
     if system.auto_migrate:
@@ -76,6 +89,7 @@ async def build_runtime(
     correlator = SignalCorrelator(
         window_ms=screener_settings.correlation_window_ms,
         rule_version=lambda: signal_engine.rule_version,
+        exchange=BYBIT,
     )
     signal_engine.on_matches = correlator.add
 
@@ -161,12 +175,34 @@ async def build_runtime(
     profiles.set_apply(state.apply_profile)
     state.apply_profile(active_profile, False)
     correlator.on_signal = state.dispatch_signal
+    state.admin_exchanges = await _load_admin_exchanges(repo)
+
+    binance_history = PriceHistoryManager() if system.binance_enabled else None
+    histories: dict[str, PriceHistoryManager] = {BYBIT: history}
+    if binance_history is not None:
+        histories[BINANCE] = binance_history
 
     commercial_settings = get_commercial_settings()
     if commercial_settings.commercial_enabled:
         state.commercial = await _build_commercial(
-            commercial_settings, session_factory, history, active_profile, system
+            commercial_settings,
+            session_factory,
+            history,
+            active_profile,
+            system,
+            histories=histories,
         )
+
+    bybit_feed = MarketFeed.from_app_state(state)
+    state.feeds[BYBIT] = bybit_feed
+    workers = [MarketWorker(state, feed=bybit_feed)]
+    if binance_history is not None:
+        binance_feed = _build_binance_feed(
+            system, state, screener_settings, repo, binance_history
+        )
+        state.feeds[BINANCE] = binance_feed
+        workers.append(MarketWorker(state, feed=binance_feed))
+        binance_feed.evaluate_admin = BINANCE in state.admin_exchanges
 
     tg: TelegramBotService | None = None
     if system.telegram_bot_token and system.admin_id:
@@ -185,8 +221,81 @@ async def build_runtime(
     else:
         logger.warning("Telegram disabled: set TELEGRAM_BOT_TOKEN and ADMIN_ID in .env")
 
-    worker = MarketWorker(state)
-    return state, worker, tg
+    return state, workers, tg
+
+
+async def _load_admin_exchanges(repo: Repository) -> set[str]:
+    raw = await repo.get_app_setting("admin_exchanges")
+    if not raw:
+        return set(ALL_EXCHANGES)
+    chosen = set(normalize_exchanges(raw.get("exchanges")))
+    return chosen or set(ALL_EXCHANGES)
+
+
+def _build_binance_feed(
+    system: SystemSettings,
+    state: AppState,
+    settings: ScreenerSettings,
+    repo: Repository,
+    history: PriceHistoryManager,
+) -> MarketFeed:
+    stats = metrics.feed(BINANCE)
+    rest = BinanceRestClient(system.binance_rest_base, stats=stats)
+    processor = BinanceTickerProcessor(stats, history)
+    signal_engine = SignalEngine(history, settings)
+    correlator = SignalCorrelator(
+        window_ms=settings.correlation_window_ms,
+        rule_version=lambda: signal_engine.rule_version,
+        exchange=BINANCE,
+        on_signal=state.dispatch_monitor_signal,
+    )
+    signal_engine.on_matches = correlator.add
+    registry = InstrumentRegistry(
+        None,
+        refresh_sec=system.instrument_refresh_sec,
+        exclude_symbols=settings.exclude_symbols,
+        instrument_sink=repo,
+        fetch=rest.fetch_instruments,
+        accept=is_crypto_usdt_perpetual,
+        mapper=map_binance_instrument,
+        stats=stats,
+        exchange=BINANCE,
+    )
+
+    async def _noop_msg(_msg: dict, _mono: float) -> None:
+        return None
+
+    ws = BinanceTickerStream(
+        system.binance_ws_market,
+        on_message=_noop_msg,
+        stats=stats,
+        stale_connection_sec=float(system.stale_connection_sec),
+        compression=None if system.ws_compression == "none" else "deflate",
+        max_queue=system.ws_max_queue,
+    )
+    commercial_engine = None
+    if state.commercial is not None:
+        commercial_engine = state.commercial.engines.get(BINANCE)
+    return MarketFeed(
+        exchange=BINANCE,
+        processor=processor,
+        history=history,
+        signal_engine=signal_engine,
+        correlator=correlator,
+        stats=stats,
+        commercial_engine=commercial_engine,
+        registry=registry,
+        ws=ws,
+        rest=rest,
+        repo=repo,
+        notifications=state.notifications,
+        primary=False,
+        evaluate_admin=BINANCE in state.admin_exchanges,
+        kline_concurrency=system.binance_kline_concurrency,
+        kline_warmup_limit=system.kline_warmup_limit,
+        stale_connection_sec=float(system.stale_connection_sec),
+        gap_backfill_min_sec=system.gap_backfill_min_sec,
+    )
 
 
 async def _build_commercial(
@@ -195,6 +304,7 @@ async def _build_commercial(
     history: PriceHistoryManager,
     active_profile: ActiveProfile,
     system: SystemSettings,
+    histories: dict[str, PriceHistoryManager] | None = None,
 ) -> CommercialRuntime:
     def format_signal(signal, signals_24h: int) -> str:
         return format_signal_message(signal, signals_24h=signals_24h)
@@ -205,6 +315,7 @@ async def _build_commercial(
         history=history,
         template_hint=active_profile.settings,
         format_signal=format_signal,
+        histories=histories,
     )
     profile = active_profile.profile
     await rt.users.bootstrap(
@@ -213,8 +324,9 @@ async def _build_commercial(
         admin_ids=system.admin_id,
     )
     template = rt.users.template
-    rt.correlator.window_ms = template.correlation_window_ms
-    rt.engine.set_groups(rt.registry.groups(), template)
+    for correlator in rt.correlators.values():
+        correlator.window_ms = template.correlation_window_ms
+    rt.apply_groups(template)
     logger.info(
         "Commercial mode ON: users=%s groups=%s price=%s XTR trial=%sh",
         rt.registry.user_count,
@@ -231,7 +343,7 @@ def build_fastapi() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        state, worker, tg = await build_runtime(system)
+        state, workers, tg = await build_runtime(system)
         _app.state.app_state = state
 
         await state.persistence.start()
@@ -243,7 +355,8 @@ def build_fastapi() -> FastAPI:
             await lifecycle_runtime.start()
         if state.commercial is not None:
             await state.commercial.start()
-        await worker.start()
+        for worker in workers:
+            await worker.start()
         if tg is not None:
             await tg.start_polling()
         log(
@@ -265,7 +378,8 @@ def build_fastapi() -> FastAPI:
                 component="main",
                 event="shutdown",
             )
-            await worker.stop()
+            for worker in reversed(workers):
+                await worker.stop()
             if state.commercial is not None:
                 await state.commercial.stop()
             if lifecycle_runtime is not None:
@@ -276,6 +390,9 @@ def build_fastapi() -> FastAPI:
             if tg is not None:
                 await tg.stop()
             await state.persistence.stop()
+            for feed in state.feeds.values():
+                if feed.rest is not None and feed.rest is not state.rest:
+                    await feed.rest.aclose()
             await state.rest.aclose()
             engine = state.extras.get("engine")
             if engine is not None:

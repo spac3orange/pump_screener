@@ -19,7 +19,24 @@ Smoke test in the staging bot: `/start` → accept terms → start trial → `/s
 signal → `/subscription` → pay (Stars in a test account) → `/account` shows Pro → cancel/resume
 auto-renew → `/admin_stats` from the admin account → `/admin_refund <charge_id>`.
 
-## 2. Migration 006 on production
+## 2. Migrations on production
+
+Migration 007 (multi-exchange) is additive: `signals.exchange` / `commercial_signals.exchange`
+(default `bybit`), `instruments` PK `(exchange, symbol)`, `users.enabled_exchanges` default
+`{bybit,binance}`, table `app_settings`. Existing Bybit rows stay. Rehearse on a copy:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://screener:screener@localhost:55433/screener_rehearsal \
+  python scripts/rehearse_migration.py --roundtrip
+```
+
+Downgrade to 006 drops only what 007 added. `AUTO_MIGRATE=false` in production; apply
+`alembic upgrade head` manually after a backup.
+
+**Geo check:** Binance `fapi` returns HTTP 451 from banned regions. Before enabling
+`BINANCE_ENABLED=true` on the server, `curl -sI https://fapi.binance.com/fapi/v1/ping`.
+
+## 2b. Migration 006 on production (historical)
 
 Migration 006 is additive (new tables only). Rehearsed on a copy of the production volume
 (revision 003 → 006, 11 674 signals): every pre-existing table had identical row counts and
@@ -77,7 +94,8 @@ Turning the flag off again stops all subscriber traffic; data stays in the comme
 
 1. Set `COMMERCIAL_ENABLED=false` and restart — enough for any runtime problem.
 2. Previous image: redeploy tag `v3.1`.
-3. Schema: `alembic downgrade 005` drops only the commercial tables (users, configs, trials,
+3. Schema: `alembic downgrade 006` drops only the 007 exchange columns/`app_settings`.
+   `alembic downgrade 005` drops only the commercial tables (users, configs, trials,
    subscriptions, payments, commercial signals/events). Existing tables are not modified. Commercial
    data is lost, so take a `pg_dump` first.
 

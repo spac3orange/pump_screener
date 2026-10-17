@@ -30,6 +30,7 @@ from screener.domain.commercial import (
     UserSignalRecord,
     UserStatus,
 )
+from screener.domain.exchanges import normalize_exchanges
 from screener.infrastructure.db.models import (
     CommercialSignalRow,
     PaymentInvoiceRow,
@@ -94,6 +95,7 @@ def _user(row: Any) -> UserAccount:
         expiry_notified_until=row.expiry_notified_until,
         created_at=row.created_at,
         language_code=row.language_code,
+        enabled_exchanges=normalize_exchanges(getattr(row, "enabled_exchanges", None)),
     )
 
 
@@ -219,6 +221,14 @@ class CommercialRepository:
                 update(UserRow)
                 .where(UserRow.id == user_id)
                 .values(monitoring_enabled=enabled, updated_at=now)
+            )
+
+    async def set_exchanges(self, user_id: int, exchanges: Sequence[str], now: datetime) -> None:
+        async with session_scope(self._sf) as session:
+            await session.execute(
+                update(UserRow)
+                .where(UserRow.id == user_id)
+                .values(enabled_exchanges=list(exchanges), updated_at=now)
             )
 
     async def accept_terms(self, user_id: int, version: str, now: datetime) -> None:
@@ -808,6 +818,7 @@ class CommercialRepository:
             {
                 "id": s.id,
                 "group_key": s.group_key,
+                "exchange": getattr(s, "exchange", "bybit") or "bybit",
                 "symbol": s.symbol,
                 "signal_type": s.signal_type.value,
                 "interval_sec": s.interval_sec,
