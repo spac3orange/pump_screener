@@ -26,6 +26,7 @@ from aiogram.types import (
     PreCheckoutQuery,
     RefundedPayment,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     SuccessfulPayment,
     Update,
 )
@@ -182,13 +183,16 @@ async def test_non_admin_cannot_reach_admin_commands(env) -> None:
     assert env.session.texts(ALICE)[-1] == texts[-1]
 
 
-async def test_quick_menu_after_terms_and_buttons_work(env) -> None:
+async def test_no_reply_keyboard_and_old_buttons_remove_it(env) -> None:
     await _onboard(env)
-    menu = [
-        c for c in env.session.of(SendMessage) if isinstance(c.reply_markup, ReplyKeyboardMarkup)
-    ]
-    assert menu and menu[-1].chat_id == ALICE
+    assert not any(
+        isinstance(c.reply_markup, ReplyKeyboardMarkup) for c in env.session.of(SendMessage)
+    )
     await env.feed(_msg(ALICE, MENU_ACCOUNT))
+    removed = [
+        c for c in env.session.of(SendMessage) if isinstance(c.reply_markup, ReplyKeyboardRemove)
+    ]
+    assert removed and removed[-1].chat_id == ALICE
     assert "Мой аккаунт" in env.session.texts(ALICE)[-1]
     await env.feed(_cb(ALICE, "us:s:long:pct"))
     await env.feed(_msg(ALICE, MENU_SUBSCRIPTION))  # abandons the pending edit

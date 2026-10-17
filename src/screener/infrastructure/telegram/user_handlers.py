@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Any
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart, Filter
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardRemove,
+    TelegramObject,
+)
 from pydantic import ValidationError
 
 from screener.application.commercial.payment_service import InvoiceError, SubscriptionChangeError
@@ -38,7 +44,6 @@ from screener.infrastructure.telegram.user_keyboards import (
     USER_SETTINGS,
     account_keyboard,
     cancel_confirm_keyboard,
-    main_menu_keyboard,
     pay_keyboard,
     reset_confirm_keyboard,
     start_keyboard,
@@ -95,12 +100,6 @@ async def u_start(message: Message, account: UserAccount, commercial: Commercial
         ),
         reply_markup=terms_keyboard() if terms_needed else start_keyboard(view),
     )
-    if not terms_needed:
-        await _send_main_menu(message)
-
-
-async def _send_main_menu(message: Message) -> None:
-    await message.answer(texts.MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
 
 
 @user_router.message(Command("account"))
@@ -167,8 +166,6 @@ async def u_action(
             start_keyboard(view),
         )
         await query.answer("Условия приняты")
-        if isinstance(query.message, Message):
-            await _send_main_menu(query.message)
         return
 
     if action == "account":
@@ -345,6 +342,7 @@ async def u_menu_button(
 ) -> None:
     assert message.from_user is not None
     state.clear_pending_edit(message.from_user.id)
+    await message.answer(texts.MENU_REMOVED_TEXT, reply_markup=ReplyKeyboardRemove())
     if message.text == MENU_ACCOUNT:
         await u_account(message, account, commercial)
     elif message.text == MENU_SETTINGS:
