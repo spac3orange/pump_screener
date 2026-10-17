@@ -30,10 +30,15 @@ from screener.infrastructure.telegram.settings_input import (
     toggle_rule,
 )
 from screener.infrastructure.telegram.user_keyboards import (
+    MENU_ACCOUNT,
+    MENU_BUTTONS,
+    MENU_HELP,
+    MENU_SETTINGS,
     USER_ACTION,
     USER_SETTINGS,
     account_keyboard,
     cancel_confirm_keyboard,
+    main_menu_keyboard,
     pay_keyboard,
     reset_confirm_keyboard,
     start_keyboard,
@@ -90,6 +95,12 @@ async def u_start(message: Message, account: UserAccount, commercial: Commercial
         ),
         reply_markup=terms_keyboard() if terms_needed else start_keyboard(view),
     )
+    if not terms_needed:
+        await _send_main_menu(message)
+
+
+async def _send_main_menu(message: Message) -> None:
+    await message.answer(texts.MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
 
 
 @user_router.message(Command("account"))
@@ -156,6 +167,8 @@ async def u_action(
             start_keyboard(view),
         )
         await query.answer("Условия приняты")
+        if isinstance(query.message, Message):
+            await _send_main_menu(query.message)
         return
 
     if action == "account":
@@ -324,6 +337,22 @@ async def u_settings_action(
         return
 
     await query.answer("Неизвестное действие", show_alert=True)
+
+
+@user_router.message(F.text.in_(MENU_BUTTONS))
+async def u_menu_button(
+    message: Message, account: UserAccount, commercial: CommercialRuntime, state: AppState
+) -> None:
+    assert message.from_user is not None
+    state.clear_pending_edit(message.from_user.id)
+    if message.text == MENU_ACCOUNT:
+        await u_account(message, account, commercial)
+    elif message.text == MENU_SETTINGS:
+        await u_settings(message, account, commercial)
+    elif message.text == MENU_HELP:
+        await u_help(message, commercial)
+    else:
+        await u_subscription(message, account, commercial)
 
 
 @user_router.message(F.text, ~F.text.startswith("/"))

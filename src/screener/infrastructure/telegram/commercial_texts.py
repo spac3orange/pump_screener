@@ -232,5 +232,6 @@ PAYMENT_PROBLEM_TEXT = (
 )
 REFUNDED_TEXT = "Возврат оформлен, доступ по подписке отключён."
 UNKNOWN_COMMAND_TEXT = "Неизвестная команда. Список команд: /help"
+MAIN_MENU_TEXT = "Меню быстрого доступа — кнопки внизу экрана."
 RATE_LIMITED_TEXT = "Слишком много запросов, подождите немного."
 TERMS_REQUIRED_TEXT = "Сначала примите условия использования: /terms"

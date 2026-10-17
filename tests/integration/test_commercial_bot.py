@@ -17,8 +17,17 @@ from aiogram.methods import (
     AnswerPreCheckoutQuery,
     CreateInvoiceLink,
     EditUserStarSubscription,
+    SendMessage,
+    SetMyCommands,
 )
-from aiogram.types import PreCheckoutQuery, RefundedPayment, SuccessfulPayment, Update
+from aiogram.types import (
+    BotCommandScopeChat,
+    PreCheckoutQuery,
+    RefundedPayment,
+    ReplyKeyboardMarkup,
+    SuccessfulPayment,
+    Update,
+)
 from sqlalchemy import text
 
 from screener.app_state import AppState
@@ -32,6 +41,7 @@ from screener.domain.models import RuleMatch
 from screener.infrastructure.db.session import create_engine, create_session_factory
 from screener.infrastructure.telegram import bot as bot_module
 from screener.infrastructure.telegram.formatter import format_signal_message
+from screener.infrastructure.telegram.user_keyboards import MENU_ACCOUNT, MENU_SUBSCRIPTION
 from tests.telegram_fakes import (
     MockSession,
     callback_update,
@@ -169,6 +179,33 @@ async def test_non_admin_cannot_reach_admin_commands(env) -> None:
     await env.feed(_cb(ALICE, "set:long:pct"))
     assert env.trading.enqueued == []
     assert env.session.texts(ALICE)[-1] == texts[-1]
+
+
+async def test_quick_menu_after_terms_and_buttons_work(env) -> None:
+    await _onboard(env)
+    menu = [
+        c for c in env.session.of(SendMessage) if isinstance(c.reply_markup, ReplyKeyboardMarkup)
+    ]
+    assert menu and menu[-1].chat_id == ALICE
+    await env.feed(_msg(ALICE, MENU_ACCOUNT))
+    assert "Мой аккаунт" in env.session.texts(ALICE)[-1]
+    await env.feed(_cb(ALICE, "us:s:long:pct"))
+    await env.feed(_msg(ALICE, MENU_SUBSCRIPTION))  # abandons the pending edit
+    assert "PumpScreener Pro" in env.session.texts(ALICE)[-1]
+    await env.feed(_msg(ALICE, "7"))
+    user = await env.rt.repo.get_user_by_telegram(ALICE)
+    assert (await env.rt.users.get_config(user.id)).long_threshold_pct == 40.0
+
+
+async def test_command_menu_scopes(env) -> None:
+    await env.svc.setup_command_menu()
+    calls = env.session.of(SetMyCommands)
+    by_scope = {type(c.scope).__name__: [b.command for b in c.commands] for c in calls}
+    assert "admin_stats" not in by_scope["BotCommandScopeDefault"]
+    assert {"account", "subscription"} <= set(by_scope["BotCommandScopeDefault"])
+    admin_call = next(c for c in calls if isinstance(c.scope, BotCommandScopeChat))
+    assert admin_call.scope.chat_id == ADMIN
+    assert "admin_stats" in [b.command for b in admin_call.commands]
 
 
 async def test_admin_gets_admin_tools_and_subscriber_commands(env) -> None:

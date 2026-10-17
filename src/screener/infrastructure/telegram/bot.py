@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import LabeledPrice
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, LabeledPrice
 
 from screener.application.commercial.dispatcher import DeliveryBlocked, DeliveryRetryAfter
 from screener.domain.commercial import STARS_CURRENCY, UserAccount
@@ -33,6 +33,33 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _RETRY_AFTER_ATTEMPTS = 3
+
+USER_COMMANDS = [
+    BotCommand(command="start", description="Главное меню"),
+    BotCommand(command="account", description="Мой доступ и статус"),
+    BotCommand(command="settings", description="Мои правила сигналов"),
+    BotCommand(command="subscription", description="Подписка и оплата"),
+    BotCommand(command="help", description="Справка"),
+    BotCommand(command="support", description="Поддержка"),
+    BotCommand(command="terms", description="Условия"),
+]
+
+ADMIN_COMMANDS = [
+    BotCommand(command="start", description="Главное меню"),
+    BotCommand(command="status", description="Состояние"),
+    BotCommand(command="settings", description="Настройки активного профиля"),
+    BotCommand(command="profiles", description="Профили мониторинга"),
+    BotCommand(command="trading", description="Автоторговля Bybit"),
+    BotCommand(command="signals", description="Последние сигналы"),
+    BotCommand(command="stats", description="Статистика"),
+    BotCommand(command="help", description="Справка"),
+]
+
+COMMERCIAL_ADMIN_COMMANDS = [
+    *ADMIN_COMMANDS,
+    BotCommand(command="admin_stats", description="Пользователи и оплаты"),
+    BotCommand(command="admin_refund", description="Возврат Stars по charge_id"),
+]
 
 
 class StarsBotGateway:
@@ -153,7 +180,24 @@ class TelegramBotService:
                 logger.warning("Telegram flood control: retry after %ss", exc.retry_after)
                 await asyncio.sleep(exc.retry_after)
 
+    async def setup_command_menu(self) -> None:
+        """Telegram "Menu" button: subscriber commands by default, admin commands per admin."""
+        commercial = getattr(self._app_state, "commercial", None) is not None
+        try:
+            if commercial:
+                await self._bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
+            else:
+                await self._bot.delete_my_commands(scope=BotCommandScopeDefault())
+            admin_commands = COMMERCIAL_ADMIN_COMMANDS if commercial else ADMIN_COMMANDS
+            for chat_id in self._app_state.system.admin_id:
+                await self._bot.set_my_commands(
+                    admin_commands, scope=BotCommandScopeChat(chat_id=chat_id)
+                )
+        except Exception as exc:
+            logger.warning("Failed to set the Telegram command menu: %s", type(exc).__name__)
+
     async def start_polling(self) -> None:
+        await self.setup_command_menu()
         self._task = asyncio.create_task(
             self._dp.start_polling(self._bot, handle_signals=False),
             name="telegram-polling",

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from screener.application.commercial.user_service import AccountView
 from screener.config import CommercialSettings
@@ -10,6 +15,24 @@ from screener.domain.commercial import AccessKind, UserDetectionConfig
 
 USER_SETTINGS = "us"
 USER_ACTION = "ua"
+
+MENU_ACCOUNT = "👤 Аккаунт"
+MENU_SETTINGS = "⚙️ Настройки"
+MENU_SUBSCRIPTION = "⭐ Подписка"
+MENU_HELP = "❓ Помощь"
+MENU_BUTTONS = (MENU_ACCOUNT, MENU_SETTINGS, MENU_SUBSCRIPTION, MENU_HELP)
+
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Persistent quick-access menu under the input field."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=MENU_ACCOUNT), KeyboardButton(text=MENU_SETTINGS)],
+            [KeyboardButton(text=MENU_SUBSCRIPTION), KeyboardButton(text=MENU_HELP)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
 def _btn(text: str, data: str) -> InlineKeyboardButton:
