@@ -111,6 +111,7 @@ async def u_account(message: Message, account: UserAccount, commercial: Commerci
 @user_router.message(Command("settings"))
 async def u_settings(message: Message, account: UserAccount, commercial: CommercialRuntime) -> None:
     cfg = await commercial.users.get_config(account.id)
+    await message.answer(texts.SETTINGS_INTRO_TEXT)
     await message.answer(texts.settings_text(cfg), reply_markup=user_settings_keyboard(cfg))
 
 
@@ -292,7 +293,11 @@ async def u_settings_action(
 
     if action == "menu":
         cfg = await users.get_config(account.id)
-        await _edit(query, texts.settings_text(cfg), user_settings_keyboard(cfg))
+        if isinstance(query.message, Message):
+            await query.message.answer(texts.SETTINGS_INTRO_TEXT)
+            await query.message.answer(
+                texts.settings_text(cfg), reply_markup=user_settings_keyboard(cfg)
+            )
         await query.answer()
         return
 

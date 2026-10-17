@@ -107,6 +107,17 @@ def account_text(view: AccountView) -> str:
     return "\n".join(lines)
 
 
+SETTINGS_INTRO_TEXT = (
+    "🟢 Маленький памп — поиск точки входа в лонг.\n"
+    "🔴 Большой памп — поиск точки входа в шорт.\n"
+    "🔻 Дамп — поиск точки входа на отскок.\n\n"
+    "<b>Примеры настроек:</b>\n"
+    "🟢 Памп 3% за 3 мин → лонг\n"
+    "🔴 Памп 30% за 10 мин → шорт\n"
+    "🔻 Дамп 10% за 15 мин → отскок"
+)
+
+
 def settings_text(cfg: UserDetectionConfig) -> str:
     return f"<b>Мои настройки сигналов</b>\n{rules_text(cfg)}"
 
