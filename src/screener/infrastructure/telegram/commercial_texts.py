@@ -65,10 +65,6 @@ def welcome_text(settings: CommercialSettings, *, terms_needed: bool, trial: boo
             f"\nДоступен бесплатный пробный период: <b>{settings.trial_duration_hours} ч</b> "
             "(один раз на аккаунт). Он начнётся только после нажатия кнопки."
         )
-    lines.append(
-        f"\nПодписка {html.escape(settings.subscription_title)}: "
-        f"<b>{settings.subscription_price_stars} ⭐</b> за 30 дней, с автопродлением."
-    )
     if terms_needed:
         lines.append("\nЧтобы продолжить, ознакомьтесь с условиями (/terms) и примите их.")
     return "\n".join(lines)
