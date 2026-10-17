@@ -100,25 +100,15 @@ async def test_access_end_stops_delivery_without_expiration_worker() -> None:
     assert writer.statuses() == ["dropped_access"]
 
 
-async def test_queued_signals_for_one_user_merge_into_one_message() -> None:
+async def test_queued_signals_are_sent_one_per_message_in_order() -> None:
     d, _, writer, sender, _, _ = _setup()
     for sym in ("AUSDT", "BUSDT", "CUSDT"):
         d.on_group_signal(_signal(sym))
         d.fanout_once()
-    await d.send_next()
-    assert len(sender.sent) == 1
-    assert sender.sent[0][1] == "AUSDT#1\n\nBUSDT#1\n\nCUSDT#1\nPRO"
+    for _ in range(3):
+        await d.send_next()
+    assert [t for _, t in sender.sent] == ["AUSDT#1\nPRO", "BUSDT#1\nPRO", "CUSDT#1\nPRO"]
     assert writer.statuses() == ["sent"] * 3
-
-
-async def test_batch_size_is_capped() -> None:
-    d, _, _, sender, _, _ = _setup(user_batch_max_signals=2)
-    for sym in ("AUSDT", "BUSDT", "CUSDT"):
-        d.on_group_signal(_signal(sym))
-        d.fanout_once()
-    await d.send_next()
-    await d.send_next()
-    assert [t.count("#") for _, t in sender.sent] == [2, 1]
 
 
 async def test_stale_signals_are_dropped() -> None:
@@ -136,7 +126,8 @@ async def test_per_user_queue_overflow_drops_oldest() -> None:
         d.on_group_signal(_signal(sym))
         d.fanout_once()
     await d.send_next()
-    assert "AUSDT" not in sender.sent[0][1]
+    await d.send_next()
+    assert [t for _, t in sender.sent] == ["BUSDT#1\nPRO", "CUSDT#1\nPRO"]
     assert sorted(writer.statuses()) == ["dropped_overflow", "sent", "sent"]
 
 

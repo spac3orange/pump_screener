@@ -305,7 +305,7 @@ PriceEvent (LIVE) ── SignalEngine ── SignalCorrelator ── dispatch_si
   автопродления — `editUserStarSubscription`, затем локально. Возврат — `/admin_refund` или
   `refunded_payment` → доступ отозван. Сверка read-only: `scripts/reconcile_stars.py`.
 - Доставка: bounded fan-out, per-user очередь (drop-oldest), глобальный темп `USER_SEND_RATE_PER_SEC`,
-  ≥`USER_CHAT_MIN_INTERVAL_SEC` на чат, накопившиеся сигналы склеиваются (до 5), старше
+  ≥`USER_CHAT_MIN_INTERVAL_SEC` на чат, один сигнал — одно сообщение, старше
   `USER_SIGNAL_MAX_AGE_SEC` не отправляются, 429 → общая пауза, Forbidden → `bot_blocked` и удаление
   из реестра (снимается при следующем сообщении пользователя). Итог по каждому пользователю —
   `user_signal_events` через упорядоченный ретрай-писатель (сигнал пишется раньше событий).

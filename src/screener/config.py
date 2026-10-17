@@ -362,7 +362,6 @@ class CommercialSettings(BaseSettings):
     user_send_rate_per_sec: float = Field(default=25.0, gt=0, le=1000)
     user_chat_min_interval_sec: float = Field(default=1.0, ge=0, le=60)
     user_queue_maxsize: int = Field(default=50, ge=1, le=1000)
-    user_batch_max_signals: int = Field(default=5, ge=1, le=20)
     fanout_queue_maxsize: int = Field(default=10_000, ge=100)
     expiry_check_sec: int = Field(default=30, ge=5, le=300)
     user_signal_retention_days: int = Field(default=30, ge=1, le=365)

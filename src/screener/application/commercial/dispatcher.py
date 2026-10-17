@@ -236,11 +236,8 @@ class UserDispatcher:
             )
         if not q.items:
             return
-        batch = [
-            q.items.popleft()
-            for _ in range(min(self._settings.user_batch_max_signals, len(q.items)))
-        ]
-        text = "\n\n".join(item.text for item in batch) + self._footer
+        batch = [q.items.popleft()]
+        text = batch[0].text + self._footer
         for item in batch:
             item.attempts += 1
         mono = self._mono()

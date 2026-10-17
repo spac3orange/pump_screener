@@ -144,8 +144,8 @@ class UserService:
         chat_id: int,
         language_code: str | None,
         is_admin: bool,
-    ) -> UserAccount:
-        """Called for every user update; cheap when nothing changed."""
+    ) -> tuple[UserAccount, bool]:
+        """Called for every user update; cheap when nothing changed. Returns (user, created)."""
         role = UserRole.ADMIN if is_admin else UserRole.USER
         user, created = await self._store.upsert_user(
             telegram_user_id=telegram_user_id,
@@ -163,7 +163,7 @@ class UserService:
                 config_hash=cfg.to_settings(self.template).config_hash(),
             )
         await self._sync(user)
-        return user
+        return user, created
 
     async def get(self, user_id: int) -> UserAccount | None:
         return await self._store.get_user(user_id)

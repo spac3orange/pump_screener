@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 from datetime import datetime
 
+from aiogram.types import User as TgUser
+
 from screener.application.commercial.user_service import AccountView
 from screener.config import CommercialSettings
 from screener.domain.commercial import AccessKind, UserAccount, UserDetectionConfig
@@ -69,7 +71,6 @@ def welcome_text(settings: CommercialSettings, *, terms_needed: bool, trial: boo
     )
     if terms_needed:
         lines.append("\nЧтобы продолжить, ознакомьтесь с условиями (/terms) и примите их.")
-    lines.append("\n<i>Сигналы не являются инвестиционной рекомендацией.</i>")
     return "\n".join(lines)
 
 
@@ -107,12 +108,7 @@ def account_text(view: AccountView) -> str:
 
 
 def settings_text(cfg: UserDetectionConfig) -> str:
-    return (
-        "<b>Мои настройки сигналов</b>\n"
-        f"{rules_text(cfg)}\n\n"
-        "<i>Изменения применяются сразу. Пауза между повторами одной монеты и "
-        "прочие системные параметры одинаковы для всех.</i>"
-    )
+    return f"<b>Мои настройки сигналов</b>\n{rules_text(cfg)}"
 
 
 def subscription_text(view: AccountView, settings: CommercialSettings) -> str:
@@ -231,6 +227,20 @@ PAYMENT_PROBLEM_TEXT = (
     "Мы уже разбираемся; при необходимости средства будут возвращены. /paysupport"
 )
 REFUNDED_TEXT = "Возврат оформлен, доступ по подписке отключён."
+
+
+def new_user_admin_text(user: TgUser) -> str:
+    name = html.escape(user.full_name or str(user.id))
+    lines = [
+        "🆕 <b>Новый пользователь</b>",
+        f'<a href="tg://user?id={user.id}">{name}</a>',
+    ]
+    if user.username:
+        lines.append(f"@{html.escape(user.username)}")
+    lines.append(f"ID: <code>{user.id}</code>")
+    return "\n".join(lines)
+
+
 UNKNOWN_COMMAND_TEXT = "Неизвестная команда. Список команд: /help"
 MENU_REMOVED_TEXT = "Кнопки внизу убраны. Все команды — в меню слева от поля ввода."
 RATE_LIMITED_TEXT = "Слишком много запросов, подождите немного."

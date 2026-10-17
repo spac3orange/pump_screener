@@ -70,7 +70,7 @@ frame, and the engine spends ~20 µs per live event.
 
 Cost scales with the number of distinct configs (groups), not users: identical configs share one
 evaluation. The real limit is Telegram (~25 msg/s globally, ≥1 s per chat): synthetic spikes every
-20 s produce more deliveries than that, so they queue, batch (≤5 signals per message) and the
+20 s produce more deliveries than that, so they queue (one signal per message) and the
 oldest are dropped after `USER_SIGNAL_MAX_AGE_SEC`. Admin signals are never affected.
 
 ## Decisions

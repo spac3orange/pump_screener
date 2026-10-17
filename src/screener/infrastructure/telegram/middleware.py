@@ -5,13 +5,16 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from aiogram import BaseMiddleware
+from aiogram import BaseMiddleware, Bot
 from aiogram.filters import Filter
-from aiogram.types import CallbackQuery, Message, TelegramObject, Update
+from aiogram.types import CallbackQuery, Message, TelegramObject, Update, User
 
 from screener.app_state import AppState
 from screener.domain.commercial import UserStatus
-from screener.infrastructure.telegram.commercial_texts import RATE_LIMITED_TEXT
+from screener.infrastructure.telegram.commercial_texts import (
+    RATE_LIMITED_TEXT,
+    new_user_admin_text,
+)
 
 if TYPE_CHECKING:
     from screener.commercial_runtime import CommercialRuntime
@@ -130,7 +133,7 @@ class UserContextMiddleware(BaseMiddleware):
         if chat is not None and chat.type != "private":
             return None if not is_admin else await handler(event, data)
         try:
-            account = await self._rt.users.register(
+            account, created = await self._rt.users.register(
                 telegram_user_id=user.id,
                 chat_id=chat.id if chat is not None else user.id,
                 language_code=user.language_code,
@@ -148,4 +151,17 @@ class UserContextMiddleware(BaseMiddleware):
         if account.status is UserStatus.BANNED and not is_admin:
             return None
         data["account"] = account
-        return await handler(event, data)
+        result = await handler(event, data)
+        if created and not is_admin:
+            await self._notify_admins_new_user(data.get("bot"), user)
+        return result
+
+    async def _notify_admins_new_user(self, bot: Bot | None, user: User) -> None:
+        if bot is None:
+            return
+        text = new_user_admin_text(user)
+        for admin_id in self._app_state.system.admin_id:
+            try:
+                await bot.send_message(admin_id, text)
+            except Exception as exc:
+                logger.warning("New-user alert to admin failed: %s", type(exc).__name__)

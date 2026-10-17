@@ -5,6 +5,7 @@ from html import escape
 from screener.domain.enums import SignalType
 from screener.domain.models import MarketSignal, RuleMatch
 
+BYBIT_URL = "https://www.bybit.com/"
 _LABELS = {
     SignalType.PUMP: "Pump",
     SignalType.DROP: "Drop",
@@ -44,15 +45,13 @@ def _match_body(match: RuleMatch) -> str:
 
 
 def format_signal_message(signal: MarketSignal, *, signals_24h: int = 1) -> str:
+    """One message shows one signal: the primary match; correlated windows are not listed."""
     primary = signal.primary
-    lines = [
-        f"ByBit – {primary.interval_sec // 60}M – {ticker_link(signal.symbol)}",
-        f"{_emoji(primary.signal_type)} {_LABELS[primary.signal_type]}: {_match_body(primary)}",
-    ]
-    for match in signal.secondary():
-        lines.append(
-            f"{_emoji(match.signal_type)} {_LABELS[match.signal_type]} "
-            f"{match.interval_sec // 60}M: {_match_body(match)}"
-        )
-    lines.append(f"Signal 24h: {signals_24h}")
-    return "\n".join(lines)
+    return "\n".join(
+        [
+            f'<a href="{BYBIT_URL}">ByBit</a> – {primary.interval_sec // 60}M – '
+            f"{ticker_link(signal.symbol)}",
+            f"{_emoji(primary.signal_type)} {_LABELS[primary.signal_type]}: {_match_body(primary)}",
+            f"🔉 Signal 24h: {signals_24h}",
+        ]
+    )
