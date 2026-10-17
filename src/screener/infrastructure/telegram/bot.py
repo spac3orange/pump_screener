@@ -9,7 +9,13 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, LabeledPrice
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    LabeledPrice,
+    LinkPreviewOptions,
+)
 
 from screener.application.commercial.dispatcher import DeliveryBlocked, DeliveryRetryAfter
 from screener.domain.commercial import STARS_CURRENCY, UserAccount
@@ -99,7 +105,10 @@ class TelegramBotService:
     def __init__(self, token: str, app_state: AppState) -> None:
         self._bot = Bot(
             token=token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            default=DefaultBotProperties(
+                parse_mode=ParseMode.HTML,
+                link_preview=LinkPreviewOptions(is_disabled=True),
+            ),
         )
         self._dp = Dispatcher()
         self._dp.update.middleware(AppStateMiddleware(app_state))

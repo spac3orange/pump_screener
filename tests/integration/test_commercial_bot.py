@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from aiogram.client.default import Default
 from aiogram.methods import (
     AnswerCallbackQuery,
     AnswerPreCheckoutQuery,
@@ -195,6 +196,13 @@ async def test_quick_menu_after_terms_and_buttons_work(env) -> None:
     await env.feed(_msg(ALICE, "7"))
     user = await env.rt.repo.get_user_by_telegram(ALICE)
     assert (await env.rt.users.get_config(user.id)).long_threshold_pct == 40.0
+
+
+async def test_link_previews_disabled_by_default(env) -> None:
+    await _onboard(env)
+    sent = env.session.of(SendMessage)[-1]
+    assert sent.link_preview_options == Default("link_preview")
+    assert env.svc.bot.default["link_preview"].is_disabled is True
 
 
 async def test_command_menu_scopes(env) -> None:
