@@ -156,6 +156,16 @@ class UserAccount:
 
 
 @dataclass(slots=True, frozen=True)
+class StartedUser:
+    """Someone who opened a private chat with the bot."""
+
+    telegram_user_id: int
+    username: str | None
+    display_name: str | None
+    role: UserRole
+
+
+@dataclass(slots=True, frozen=True)
 class SubscriptionInfo:
     id: UUID
     user_id: int

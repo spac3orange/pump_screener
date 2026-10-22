@@ -138,6 +138,8 @@ class UserContextMiddleware(BaseMiddleware):
                 chat_id=chat.id if chat is not None else user.id,
                 language_code=user.language_code,
                 is_admin=is_admin,
+                username=user.username,
+                display_name=user.full_name,
             )
         except Exception:
             logger.warning("User registration failed for an incoming update", exc_info=True)

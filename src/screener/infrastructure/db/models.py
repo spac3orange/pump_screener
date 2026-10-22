@@ -297,6 +297,8 @@ class UserRow(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False, server_default="user")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
     language_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     monitoring_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )

@@ -31,8 +31,6 @@ from screener.infrastructure.db.commercial_repo import CommercialRepository
 
 logger = logging.getLogger(__name__)
 
-SIGNAL_FOOTER = "\n\n<i>PumpScreener Pro</i>"
-
 
 @dataclass
 class CommercialRuntime:
@@ -104,7 +102,6 @@ def build_commercial(
         clock,
         settings,
         format_signal=format_signal,
-        footer=SIGNAL_FOOTER,
     )
     dispatcher_holder["d"] = dispatcher
     for correlator in correlators.values():

@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import html
+from collections.abc import Sequence
 from datetime import datetime
 
 from aiogram.types import User as TgUser
 
 from screener.application.commercial.user_service import AccountView
 from screener.config import CommercialSettings
-from screener.domain.commercial import AccessKind, UserAccount, UserDetectionConfig
+from screener.domain.commercial import (
+    AccessKind,
+    StartedUser,
+    UserAccount,
+    UserDetectionConfig,
+    UserRole,
+)
 from screener.domain.exchanges import exchanges_label
 
 PRODUCT = "PumpScreener"
@@ -238,6 +245,44 @@ PAYMENT_PROBLEM_TEXT = (
     "Мы уже разбираемся; при необходимости средства будут возвращены. /paysupport"
 )
 REFUNDED_TEXT = "Возврат оформлен, доступ по подписке отключён."
+
+
+_PAGE = 3500
+
+
+def started_users_messages(users: Sequence[StartedUser]) -> list[str]:
+    """Admin roster: how many people opened the bot, with id and nick."""
+    header = f"<b>Запускали бота: {len(users)}</b>"
+    if not users:
+        return [f"{header}\nПока никто не запускал бота."]
+    lines = [header, ""]
+    for user in users:
+        if user.username:
+            label = f"@{html.escape(user.username)}"
+        elif user.display_name:
+            label = html.escape(user.display_name)
+        else:
+            label = "без ника"
+        mark = " · админ" if user.role is UserRole.ADMIN else ""
+        lines.append(
+            f'<a href="tg://user?id={user.telegram_user_id}">{label}</a>'
+            f" — <code>{user.telegram_user_id}</code>{mark}"
+        )
+    pages: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in lines:
+        extra = len(line) + 1
+        if current and size + extra > _PAGE:
+            pages.append("\n".join(current))
+            current = [line]
+            size = extra
+        else:
+            current.append(line)
+            size += extra
+    if current:
+        pages.append("\n".join(current))
+    return pages
 
 
 def new_user_admin_text(user: TgUser) -> str:

@@ -64,6 +64,7 @@ ADMIN_COMMANDS = [
 COMMERCIAL_ADMIN_COMMANDS = [
     *ADMIN_COMMANDS,
     BotCommand(command="admin_stats", description="Пользователи и оплаты"),
+    BotCommand(command="admin_users", description="Кто запускал бота: id и ник"),
     BotCommand(command="admin_refund", description="Возврат Stars по charge_id"),
 ]
 

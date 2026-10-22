@@ -41,6 +41,11 @@ existing rows). Downgrade to 007 removes that element and restores the previous 
 A saved admin set in `app_settings` (`admin_exchanges`) is left as stored: if it has no
 `bitget`, the admin Bitget engine stays off until the admin turns it on in `/settings`.
 A missing key still means every exchange, including Bitget.
+
+Migration 009 adds `users.username` and `users.display_name` (both nullable) so
+`/admin_users` can list people who started the bot. Existing rows stay; a name appears
+after the next message from that user, or when the admin runs `/admin_users` and Telegram
+still knows the chat. Downgrade drops only those two columns.
 `AUTO_MIGRATE=false` in production; apply `alembic upgrade head` manually after a backup.
 Before `BITGET_ENABLED=true`, confirm instruments from the server:
 

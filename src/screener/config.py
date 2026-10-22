@@ -253,7 +253,6 @@ class TradingSettings(BaseSettings):
     sl_trigger_by: str = "MarkPrice"
 
     max_signal_age_seconds: float = Field(default=30.0, gt=0)
-    trading_notify_skips: bool = True
     trading_queue_maxsize: int = Field(default=1000, ge=10)
     instrument_cache_ttl_sec: float = Field(default=300.0, gt=0)
     account_stats_cache_ttl_sec: float = Field(default=3.0, gt=0)

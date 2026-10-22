@@ -185,9 +185,10 @@ async def test_trial_requires_terms_then_starts_once(env) -> None:
 
 async def test_non_admin_cannot_reach_admin_commands(env) -> None:
     await _onboard(env)
-    for cmd in ("/status", "/trading", "/profiles", "/admin_stats", "/admin_refund x"):
+    cmds = ("/status", "/trading", "/profiles", "/admin_stats", "/admin_refund x", "/admin_users")
+    for cmd in cmds:
         await env.feed(_msg(ALICE, cmd))
-    texts = env.session.texts(ALICE)[-5:]
+    texts = env.session.texts(ALICE)[-len(cmds) :]
     assert all("Неизвестная команда" in t for t in texts)
     await env.feed(_cb(ALICE, "trading:on"))
     await env.feed(_cb(ALICE, "set:long:pct"))
@@ -226,10 +227,22 @@ async def test_command_menu_scopes(env) -> None:
     calls = env.session.of(SetMyCommands)
     by_scope = {type(c.scope).__name__: [b.command for b in c.commands] for c in calls}
     assert "admin_stats" not in by_scope["BotCommandScopeDefault"]
+    assert "admin_users" not in by_scope["BotCommandScopeDefault"]
     assert {"account", "subscription"} <= set(by_scope["BotCommandScopeDefault"])
     admin_call = next(c for c in calls if isinstance(c.scope, BotCommandScopeChat))
     assert admin_call.scope.chat_id == ADMIN
-    assert "admin_stats" in [b.command for b in admin_call.commands]
+    admin_cmds = [b.command for b in admin_call.commands]
+    assert "admin_stats" in admin_cmds
+    assert "admin_users" in admin_cmds
+
+
+async def test_admin_users_lists_id_and_nick(env) -> None:
+    await env.feed(msg_update(ALICE, "/start", username="alice_nick"))
+    await env.feed(_msg(ADMIN, "/admin_users"))
+    text = "\n".join(env.session.texts(ADMIN))
+    assert "Запускали бота: 2" in text
+    assert "@alice_nick" in text and f"<code>{ALICE}</code>" in text
+    assert f"<code>{ADMIN}</code>" in text and "админ" in text
 
 
 async def test_admin_gets_admin_tools_and_subscriber_commands(env) -> None:
@@ -407,7 +420,8 @@ async def test_commercial_signal_reaches_subscriber_never_trading(env) -> None:
     env.rt.dispatcher.fanout_once()
     await env.rt.dispatcher.send_next()
     last = env.session.texts(ALICE)[-1]
-    assert "Pump" in last and "PumpScreener Pro" in last
+    assert "Pump" in last
+    assert "PumpScreener Pro" not in last
     assert env.trading.enqueued == []
     await env.rt.writer.flush_once()
     async with env.sf() as s:

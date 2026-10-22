@@ -52,18 +52,22 @@ def next_id() -> int:
     return next(_ids)
 
 
-def tg_user(uid: int) -> User:
-    return User(id=uid, is_bot=False, first_name=f"u{uid}", language_code="ru")
+def tg_user(uid: int, username: str | None = None) -> User:
+    return User(
+        id=uid, is_bot=False, first_name=f"u{uid}", username=username, language_code="ru"
+    )
 
 
-def msg_update(uid: int, text: str | None = None, **extra) -> Update:
+def msg_update(
+    uid: int, text: str | None = None, *, username: str | None = None, **extra
+) -> Update:
     return Update(
         update_id=next_id(),
         message=Message(
             message_id=next_id(),
             date=datetime.now(UTC),
             chat=Chat(id=uid, type="private"),
-            from_user=tg_user(uid),
+            from_user=tg_user(uid, username=username),
             text=text,
             **extra,
         ),

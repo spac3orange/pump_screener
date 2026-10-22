@@ -32,7 +32,6 @@ def _settings(**kwargs) -> TradingSettings:
         pump_action="SHORT",
         drop_action="IGNORE",
         dump_action="LONG",
-        trading_notify_skips=True,
         max_signal_age_seconds=60,
         _env_file=None,
     )
@@ -250,7 +249,7 @@ async def test_trading_off_skips_without_order() -> None:
     svc._enabled = False
     await svc._handle(_signal())
     assert gw.place_calls == 0
-    assert any("disabled" in n for n in notes)
+    assert notes == []
 
 
 @pytest.mark.asyncio
@@ -298,7 +297,7 @@ async def test_existing_position_skips() -> None:
     svc._enabled = True
     await svc._handle(_signal())
     assert gw.place_calls == 0
-    assert any("existing_position" in n for n in notes)
+    assert notes == []
 
 
 @pytest.mark.asyncio
@@ -325,7 +324,7 @@ async def test_max_positions_skips() -> None:
     svc._enabled = True
     await svc._handle(_signal())
     assert gw.place_calls == 0
-    assert any("max_positions" in n for n in notes)
+    assert notes == []
 
 
 @pytest.mark.asyncio
@@ -443,8 +442,7 @@ async def test_restart_without_auto_resume_reports_reason() -> None:
         assert svc.disabled_reason == "restart_no_auto_resume"
         assert any("Торговый модуль запущен" in n and "TRADING_AUTO_RESUME" in n for n in notes)
         await svc._handle(_signal(SignalType.DUMP))
-        skip = notes[-1]
-        assert "Reason: disabled" in skip and "перезапущен" in skip
+        assert not any("Сделка пропущена" in n for n in notes)
         assert gw.place_calls == 0
     finally:
         await svc.stop()

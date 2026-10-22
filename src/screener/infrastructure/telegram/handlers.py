@@ -17,6 +17,7 @@ from screener.application.trading.service import AccountStatsView, TradingServic
 from screener.config import ScreenerSettings
 from screener.domain.exchanges import BINANCE, BITGET, BYBIT, exchanges_label, toggle_exchange
 from screener.domain.profiles import ProfileError, ProfileNameTaken, normalize_profile_name
+from screener.infrastructure.telegram.commercial_texts import started_users_messages
 from screener.infrastructure.telegram.help_text import build_help_messages
 from screener.infrastructure.telegram.keyboards import (
     settings_keyboard,
@@ -361,6 +362,42 @@ async def cmd_admin_stats(message: Message, state: AppState) -> None:
         f"writer backlog: {rt.writer.backlog}\n"
         f"{_feeds_status(snap)}"
     )
+
+
+_NAME_LOOKUPS = 30
+
+
+@router.message(Command("admin_users"))
+async def cmd_admin_users(message: Message, state: AppState) -> None:
+    rt = state.commercial
+    if rt is None:
+        await message.answer("Коммерческий режим выключен (<code>COMMERCIAL_ENABLED=false</code>).")
+        return
+    users = await rt.repo.list_started_users()
+    looked = 0
+    filled = False
+    for user in users:
+        if user.username or user.display_name or looked >= _NAME_LOOKUPS:
+            continue
+        looked += 1
+        try:
+            chat = await message.bot.get_chat(user.telegram_user_id)
+        except Exception:
+            continue
+        username = getattr(chat, "username", None)
+        first = getattr(chat, "first_name", None) or ""
+        last = getattr(chat, "last_name", None) or ""
+        display = " ".join(part for part in (str(first), str(last)) if part).strip() or None
+        if not username and not display:
+            continue
+        await rt.repo.set_public_name(
+            user.telegram_user_id, username=username, display_name=display
+        )
+        filled = True
+    if filled:
+        users = await rt.repo.list_started_users()
+    for part in started_users_messages(users):
+        await message.answer(part)
 
 
 @router.message(Command("admin_refund"))

@@ -121,7 +121,6 @@ async def main() -> int:
             "stop_loss_pct": args.bracket_pct,
             "tp_trigger_by": "LastPrice",
             "sl_trigger_by": "LastPrice",
-            "trading_notify_skips": True,
             "lifecycle_pnl_wait_sec": 5.0,
         }
     )

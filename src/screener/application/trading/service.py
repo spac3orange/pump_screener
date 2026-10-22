@@ -548,12 +548,6 @@ class TradingService:
                     status=ExecutionStatus.SKIPPED.value,
                     skip_reason=reason,
                 )
-        if self.settings.trading_notify_skips:
-            await self._notify_text(
-                f"⏭ Сделка пропущена\n{signal.symbol}\nSignal: {signal.signal_type.value}\n"
-                f"Action: {action.value}\nReason: {reason}"
-                + (f"\nПочему: {html.escape(detail)}" if detail else "")
-            )
 
     async def _instrument(self, symbol: str) -> ResolvedInstrument:
         assert self._gateway is not None
@@ -588,10 +582,6 @@ class TradingService:
                 skip_reason="existing_position",
             )
             metrics.trade_signals_skipped_total += 1
-            if self.settings.trading_notify_skips:
-                await self._notify_text(
-                    f"⏭ Сделка пропущена\n{signal.symbol}\nReason: existing_position"
-                )
             return
 
         open_positions = await gw.list_open_positions()
@@ -602,10 +592,6 @@ class TradingService:
                 skip_reason="max_positions",
             )
             metrics.trade_signals_skipped_total += 1
-            if self.settings.trading_notify_skips:
-                await self._notify_text(
-                    f"⏭ Сделка пропущена\n{signal.symbol}\nReason: max_positions"
-                )
             return
 
         bal = await gw.get_balance()
@@ -631,10 +617,6 @@ class TradingService:
                 leverage=float(leverage),
             )
             metrics.trade_signals_skipped_total += 1
-            if self.settings.trading_notify_skips:
-                await self._notify_text(
-                    f"⏭ Сделка пропущена\n{signal.symbol}\nReason: {sized.reason}"
-                )
             return
 
         if pos.leverage is None or pos.leverage != leverage:

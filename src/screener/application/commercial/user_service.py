@@ -146,6 +146,8 @@ class UserService:
         chat_id: int,
         language_code: str | None,
         is_admin: bool,
+        username: str | None = None,
+        display_name: str | None = None,
     ) -> tuple[UserAccount, bool]:
         """Called for every user update; cheap when nothing changed. Returns (user, created)."""
         role = UserRole.ADMIN if is_admin else UserRole.USER
@@ -155,6 +157,8 @@ class UserService:
             language_code=language_code,
             role=role,
             now=self._clock.now(),
+            username=username,
+            display_name=display_name,
         )
         if created:
             cfg = self.default_config()

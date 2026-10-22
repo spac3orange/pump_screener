@@ -23,6 +23,7 @@ from screener.domain.commercial import (
     PaymentInput,
     PaymentKind,
     PaymentStatus,
+    StartedUser,
     SubscriptionInfo,
     SubscriptionStatus,
     UserAccount,
@@ -127,6 +128,15 @@ def _invoice(row: PaymentInvoiceRow) -> InvoiceInfo:
 
 
 _USER_COLS = tuple(UserRow.__table__.c)
+_USERNAME_MAX = 32
+_DISPLAY_NAME_MAX = 128
+
+
+def _public_name(value: str | None, limit: int) -> str | None:
+    if not value:
+        return None
+    text = value.strip().lstrip("@")
+    return text[:limit] or None
 
 
 class CommercialRepository:
@@ -145,18 +155,24 @@ class CommercialRepository:
         language_code: str | None,
         role: UserRole,
         now: datetime,
+        username: str | None = None,
+        display_name: str | None = None,
     ) -> tuple[UserAccount, bool]:
         """Register on first contact (never starts a trial); refresh on later updates.
 
         Writing to the bot again clears ``bot_blocked``; ``banned`` is sticky.
         """
         lang = (language_code or "")[:8] or None
+        nick = _public_name(username, _USERNAME_MAX)
+        name = _public_name(display_name, _DISPLAY_NAME_MAX)
         stmt = (
             insert(UserRow)
             .values(
                 telegram_user_id=telegram_user_id,
                 chat_id=chat_id,
                 language_code=lang,
+                username=nick,
+                display_name=name,
                 role=role.value,
                 # Admins already get the internal admin feed; commercial copies are opt-in.
                 monitoring_enabled=role is UserRole.USER,
@@ -169,6 +185,8 @@ class CommercialRepository:
                 set_={
                     "chat_id": chat_id,
                     "language_code": func.coalesce(lang, UserRow.language_code),
+                    "username": nick,
+                    "display_name": name,
                     "role": role.value,
                     "last_seen_at": now,
                     "status": case(
@@ -205,6 +223,43 @@ class CommercialRepository:
         async with session_scope(self._sf) as session:
             row = await session.get(UserRow, user_id)
             return None if row is None else _user(row)
+
+    async def list_started_users(self) -> list[StartedUser]:
+        """Everyone who opened the bot, newest first."""
+        stmt = select(
+            UserRow.telegram_user_id,
+            UserRow.username,
+            UserRow.display_name,
+            UserRow.role,
+        ).order_by(UserRow.created_at.desc(), UserRow.telegram_user_id)
+        async with session_scope(self._sf) as session:
+            rows = (await session.execute(stmt)).all()
+        return [
+            StartedUser(
+                telegram_user_id=row.telegram_user_id,
+                username=row.username,
+                display_name=row.display_name,
+                role=UserRole(row.role),
+            )
+            for row in rows
+        ]
+
+    async def set_public_name(
+        self,
+        telegram_user_id: int,
+        *,
+        username: str | None,
+        display_name: str | None,
+    ) -> None:
+        async with session_scope(self._sf) as session:
+            await session.execute(
+                update(UserRow)
+                .where(UserRow.telegram_user_id == telegram_user_id)
+                .values(
+                    username=_public_name(username, _USERNAME_MAX),
+                    display_name=_public_name(display_name, _DISPLAY_NAME_MAX),
+                )
+            )
 
     async def get_user_by_telegram(self, telegram_user_id: int) -> UserAccount | None:
         async with session_scope(self._sf) as session:
