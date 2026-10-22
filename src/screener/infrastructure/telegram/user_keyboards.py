@@ -20,8 +20,8 @@ MENU_HELP = "❓ Помощь"
 MENU_BUTTONS = (MENU_ACCOUNT, MENU_SETTINGS, MENU_SUBSCRIPTION, MENU_HELP)
 
 
-def _btn(text: str, data: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=text, callback_data=data)
+def _btn(text: str, data: str, *, style: str | None = None) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=data, style=style)
 
 
 def _flag(enabled: bool) -> str:
@@ -37,9 +37,11 @@ def terms_keyboard() -> InlineKeyboardMarkup:
 def start_keyboard(view: AccountView) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if view.trial_available and not view.access.active:
-        rows.append([_btn("🎁 Начать пробный период", f"{USER_ACTION}:trial")])
+        rows.append(
+            [_btn("🎁 Начать пробный период", f"{USER_ACTION}:trial", style="success")]
+        )
     if view.access.kind is not AccessKind.ADMIN and view.subscription is None:
-        rows.append([_btn("⭐ Оформить подписку", f"{USER_ACTION}:sub")])
+        rows.append([_btn("⭐ Оформить подписку", f"{USER_ACTION}:sub", style="success")])
     rows.append(
         [
             _btn("👤 Аккаунт", f"{USER_ACTION}:account"),
@@ -53,7 +55,9 @@ def account_keyboard(view: AccountView) -> InlineKeyboardMarkup:
     mon = "⏸ Выключить сигналы" if view.user.monitoring_enabled else "▶️ Включить сигналы"
     rows = [[_btn(mon, f"{USER_ACTION}:mon")]]
     if view.trial_available and not view.access.active:
-        rows.append([_btn("🎁 Начать пробный период", f"{USER_ACTION}:trial")])
+        rows.append(
+            [_btn("🎁 Начать пробный период", f"{USER_ACTION}:trial", style="success")]
+        )
     rows.append(
         [
             _btn("⚙️ Настройки", f"{USER_SETTINGS}:menu"),
@@ -70,10 +74,16 @@ def subscription_keyboard(view: AccountView, settings: CommercialSettings) -> In
         pass
     elif sub is None:
         rows.append(
-            [_btn(f"⭐ Оплатить {settings.subscription_price_stars} Stars", f"{USER_ACTION}:buy")]
+            [
+                _btn(
+                    f"⭐ Оплатить {settings.subscription_price_stars} Stars",
+                    f"{USER_ACTION}:buy",
+                    style="success",
+                )
+            ]
         )
         if view.trial_available and not view.access.active:
-            rows.append([_btn("🎁 Пробный период", f"{USER_ACTION}:trial")])
+            rows.append([_btn("🎁 Пробный период", f"{USER_ACTION}:trial", style="success")])
     elif sub.cancel_at_period_end:
         rows.append([_btn("🔄 Включить автопродление", f"{USER_ACTION}:resume")])
     else:
@@ -98,7 +108,9 @@ def pay_keyboard(link: str, settings: CommercialSettings) -> InlineKeyboardMarku
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"⭐ Оплатить {settings.subscription_price_stars} Stars", url=link
+                    text=f"⭐ Оплатить {settings.subscription_price_stars} Stars",
+                    url=link,
+                    style="success",
                 )
             ]
         ]
@@ -142,7 +154,7 @@ def user_settings_keyboard(
                 code, binance_available=binance_available, bitget_available=bitget_available
             )
         ],
-        [_btn("↩️ Сбросить по умолчанию", f"{p}:reset")],
+        [_btn("↩️ Сбросить по умолчанию", f"{p}:reset", style="danger")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
