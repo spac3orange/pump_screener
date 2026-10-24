@@ -37,7 +37,7 @@ def prompt_for(kind: str, field_name: str, settings: BaseModel) -> str:
         minutes = getattr(settings, _PERIOD_ATTR[kind]) // 60
         return f"Введите период {name} в минутах (1–60). Сейчас: {minutes}."
     current = getattr(settings, _PCT_ATTR[kind])
-    return f"Введите процент {name}. Сейчас: {current:g}."
+    return f"Введите процент {name} (до {_MAX_PCT[kind]:g}). Сейчас: {current:g}."
 
 
 def parse_period_minutes(text: str) -> int:
@@ -50,14 +50,18 @@ def parse_period_minutes(text: str) -> int:
     return minutes * 60
 
 
-def parse_percent(text: str) -> float:
+_MAX_PCT = {"long": 500.0, "short": 99.0, "dump": 99.0}
+
+
+def parse_percent(text: str, max_pct: float = 500.0) -> float:
+    error = f"Нужно число больше 0 и не больше {max_pct:g}."
     raw = text.strip().replace(",", ".")
     try:
         value = float(raw)
     except ValueError:
-        raise SettingInputError("Нужно число больше 0 и не больше 500.") from None
-    if value <= 0 or value > 500:
-        raise SettingInputError("Нужно число больше 0 и не больше 500.")
+        raise SettingInputError(error) from None
+    if not value > 0 or value > max_pct:
+        raise SettingInputError(error)
     return round(value, 2)
 
 
@@ -102,7 +106,7 @@ def apply_setting_text[M: BaseModel](
     if field_name == "period":
         setattr(updated, _PERIOD_ATTR[kind], parse_period_minutes(text))
     elif field_name == "pct":
-        setattr(updated, _PCT_ATTR[kind], parse_percent(text))
+        setattr(updated, _PCT_ATTR[kind], parse_percent(text, _MAX_PCT[kind]))
     else:
         raise SettingInputError("Неизвестная настройка.")
     return updated

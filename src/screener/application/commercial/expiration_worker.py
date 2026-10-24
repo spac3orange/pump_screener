@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 from screener.application.clock import Clock
+from screener.application.commercial.dispatcher import DeliveryBlocked, DeliveryRetryAfter
 from screener.application.commercial.user_service import UserService
 from screener.application.metrics import metrics
 from screener.application.supervisor import cancel_tasks, supervise
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 ExpiryNotify = Callable[[UserAccount], Awaitable[None]]
 
 _PURGE_EVERY_SEC = 3600.0
+# Expiry notices share the bot's global limit with signal fan-out.
+_NOTICE_INTERVAL_SEC = 0.1
+_MAX_RETRY_AFTER_SEC = 60.0
 
 
 class ExpirationWorker:
@@ -60,15 +64,32 @@ class ExpirationWorker:
         claimed = await self._store.claim_expired(now)
         for user in claimed:
             await self._users.apply_account(user)
-            if self._notify is None:
-                continue
+        if self._notify is not None:
+            for user in claimed:
+                await self._send_notice(user)
+                await asyncio.sleep(_NOTICE_INTERVAL_SEC)
+        await self._maybe_purge(settings.user_signal_retention_days)
+        return len(claimed)
+
+    async def _send_notice(self, user: UserAccount) -> None:
+        """The claim is already committed, so a notice lost here is never retried."""
+        assert self._notify is not None
+        for attempt in range(2):
             try:
                 await self._notify(user)
                 metrics.expiry_notifications_total += 1
+                return
+            except DeliveryBlocked:
+                await self._users.mark_blocked(user.id)
+                return
+            except DeliveryRetryAfter as exc:
+                if attempt == 0:
+                    await asyncio.sleep(min(exc.seconds, _MAX_RETRY_AFTER_SEC))
+                    continue
+                logger.info("Expiry notice to user_id=%s dropped by flood control", user.id)
             except Exception as exc:
                 logger.info("Expiry notice to user_id=%s failed: %s", user.id, type(exc).__name__)
-        await self._maybe_purge(settings.user_signal_retention_days)
-        return len(claimed)
+            return
 
     async def _maybe_purge(self, retention_days: int) -> None:
         now_ms = self._clock.time_ms()

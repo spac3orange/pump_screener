@@ -62,7 +62,7 @@ class Repository:
 
     async def save_signal(self, signal: MarketSignal) -> None:
         async with session_scope(self._sf) as session:
-            row = SignalRow(
+            stmt = insert(SignalRow).values(
                 id=signal.id,
                 exchange=signal.exchange,
                 symbol=signal.symbol,
@@ -79,7 +79,8 @@ class Repository:
                 monitoring_profile_id=signal.monitoring_profile_id,
                 monitoring_profile_version_id=signal.monitoring_profile_version_id,
             )
-            session.add(row)
+            # A retry after a commit that timed out on the client must not fail forever.
+            await session.execute(stmt.on_conflict_do_nothing(index_elements=[SignalRow.id]))
 
     async def save_notification(
         self,

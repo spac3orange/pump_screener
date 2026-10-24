@@ -23,6 +23,14 @@ def test_toggle_refuses_to_turn_off_the_last_exchange() -> None:
     assert toggle_exchange(frozenset(ALL_EXCHANGES), BITGET) == frozenset({BYBIT, BINANCE})
 
 
+def test_toggle_keeps_one_running_exchange() -> None:
+    running = frozenset({BYBIT, BITGET})
+    assert toggle_exchange(frozenset({BYBIT, BINANCE}), BYBIT, running) is None
+    assert toggle_exchange(frozenset(ALL_EXCHANGES), BYBIT, running) == frozenset(
+        {BINANCE, BITGET}
+    )
+
+
 def test_normalize_and_label() -> None:
     assert normalize_exchanges(["bybit", "unknown", "binance"]) == frozenset({BYBIT, BINANCE})
     assert normalize_exchanges("nope") == frozenset(ALL_EXCHANGES)

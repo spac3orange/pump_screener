@@ -119,7 +119,13 @@ class NotificationService:
     async def start(self) -> None:
         self._tasks.append(supervise("notifications", self._loop))
 
-    async def stop(self) -> None:
+    async def stop(self, drain_timeout_sec: float = 5.0) -> None:
+        # Signals flushed by the correlators on shutdown are still worth sending.
+        if self._tasks and not self._queue.empty():
+            try:
+                await asyncio.wait_for(self._queue.join(), timeout=drain_timeout_sec)
+            except TimeoutError:
+                logger.warning("Shutdown: %s alerts left unsent", self._queue.qsize())
         await cancel_tasks(self._tasks)
 
     def enqueue(self, signal: MarketSignal) -> None:

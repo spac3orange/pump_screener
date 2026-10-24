@@ -293,7 +293,10 @@ class WebSocketManager:
                     state.last_frame_mono = time.monotonic()
                     metrics.ws_connections = self.connection_count
                     if self.on_connect is not None:
-                        self.on_connect(state.symbols)
+                        try:
+                            self.on_connect(state.symbols)
+                        except Exception:
+                            logger.exception("WS on_connect callback failed")
                     await self._send_op(state, "subscribe", state.symbols)
                     backoff = 1.0
                     ping_task = asyncio.create_task(self._ping_loop(ws, state))
@@ -343,7 +346,10 @@ class WebSocketManager:
         state.pending.clear()
         metrics.ws_connections = self.connection_count
         if connected_once and was_connected and self.on_disconnect is not None:
-            self.on_disconnect(state.symbols, state.last_exchange_ts_ms)
+            try:
+                self.on_disconnect(state.symbols, state.last_exchange_ts_ms)
+            except Exception:
+                logger.exception("WS on_disconnect callback failed")
 
     async def _ping_loop(self, ws: ClientConnection, state: ShardState) -> None:
         while not state.stop_event.is_set():

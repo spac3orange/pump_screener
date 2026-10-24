@@ -220,7 +220,10 @@ class BitgetTickerStream:
                     shard.last_frame_mono = time.monotonic()
                     self._sync_connections()
                     if self.on_connect is not None:
-                        self.on_connect(shard.symbols)
+                        try:
+                            self.on_connect(shard.symbols)
+                        except Exception:
+                            logger.exception("Bitget WS on_connect callback failed")
                     await self._send_op(shard, "subscribe", shard.symbols)
                     backoff = 1.0
                     ping = asyncio.create_task(self._ping(ws))
@@ -250,7 +253,10 @@ class BitgetTickerStream:
         shard.ws = None
         self._sync_connections()
         if connected_once and was_connected and self.on_disconnect is not None:
-            self.on_disconnect(shard.symbols, shard.last_exchange_ts_ms)
+            try:
+                self.on_disconnect(shard.symbols, shard.last_exchange_ts_ms)
+            except Exception:
+                logger.exception("Bitget WS on_disconnect callback failed")
 
     async def _ping(self, ws: ClientConnection) -> None:
         while True:
@@ -278,6 +284,15 @@ class BitgetTickerStream:
             self._stats.ws_decode_errors_total += 1
             return
         if not isinstance(msg, dict):
+            return
+        if msg.get("event") == "error":
+            logger.warning(
+                "Bitget WS shard %s error code=%s msg=%s arg=%s",
+                shard.shard_id,
+                msg.get("code"),
+                msg.get("msg"),
+                msg.get("arg"),
+            )
             return
         ts = msg.get("ts")
         if isinstance(ts, int):

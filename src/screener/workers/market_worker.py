@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _GAP_CHECK_DELAY_SEC = 5.0
+_KLINE_ATTEMPTS = 3
+_KLINE_RETRY_SEC = 5.0
 
 
 class MarketWorker:
@@ -40,6 +42,7 @@ class MarketWorker:
         )
         self._tasks: list[asyncio.Task] = []
         self._background: set[asyncio.Task] = set()
+        self._kline_sem: asyncio.Semaphore | None = None
         self._commercial_engine: MultiConfigEngine | None = self._feed.commercial_engine
         if self._commercial_engine is None:
             self._commercial_engine = getattr(state, "commercial_engine", None)
@@ -80,8 +83,6 @@ class MarketWorker:
         processor = self._feed.processor
         if hasattr(processor, "on_resubscribe"):
             processor.on_resubscribe(symbols)
-        if hasattr(processor, "set_universe"):
-            processor.set_universe(symbols)
         if symbols and any(self._feed.history.span(s) for s in symbols[:5]):
             self._spawn(self._backfill_gaps_later(symbols), "gap-backfill")
 
@@ -190,10 +191,10 @@ class MarketWorker:
     ) -> None:
         feed = self._feed
         symbols = [i.symbol for i in instruments]
-        if feed.ws is not None:
-            await feed.ws.update_symbols(symbols)
         if hasattr(feed.processor, "set_universe"):
             feed.processor.set_universe(symbols)
+        if feed.ws is not None:
+            await feed.ws.update_symbols(symbols)
         for sym in removed:
             feed.processor.reset_symbol(sym)
             feed.signal_engine.dedup.clear_symbol(sym)
@@ -252,16 +253,18 @@ class MarketWorker:
                     try:
                         await feed.repo.log_event(
                             level="WARNING",
-                            component="binance",
+                            component=feed.exchange,
                             event_type="feed_degraded",
                             message=(
-                                f"Binance feed not ready "
+                                f"{feed.exchange} feed not ready "
                                 f"instruments={feed.stats.instruments_active} "
                                 f"ws={connections}"
                             ),
                         )
                     except Exception:
-                        logger.warning("Failed to log Binance degradation", exc_info=True)
+                        logger.warning(
+                            "Failed to log %s degradation", feed.exchange, exc_info=True
+                        )
                 was_ready = ready
             await asyncio.sleep(1.0)
 
@@ -288,22 +291,33 @@ class MarketWorker:
             longest = max(longest, MAX_RULE_INTERVAL_SEC)
         return min(1000, max(self._feed.kline_warmup_limit, longest // 60 + 4))
 
+    async def _fetch_kline(self, symbol: str, what: str, **kwargs) -> list | None:
+        """One REST budget per feed: every shard reconnecting at once shares it."""
+        if self._kline_sem is None:
+            self._kline_sem = asyncio.Semaphore(self._feed.kline_concurrency)
+        for attempt in range(_KLINE_ATTEMPTS):
+            async with self._kline_sem:
+                try:
+                    return await self._feed.rest.fetch_kline(symbol, interval="1", **kwargs)
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+            if attempt + 1 < _KLINE_ATTEMPTS:
+                await asyncio.sleep(_KLINE_RETRY_SEC * (attempt + 1))
+        logger.warning("%s%s failed for %s (%s)", self._tag(), what, symbol, error)
+        return None
+
     async def _warmup_symbols(self, symbols: list[str]) -> None:
         if not symbols or self._feed.rest is None:
             return
         feed = self._feed
-        sem = asyncio.Semaphore(feed.kline_concurrency)
         limit = self._kline_limit()
         done = 0
 
         async def one(symbol: str) -> None:
             nonlocal done
-            async with sem:
-                try:
-                    rows = await feed.rest.fetch_kline(symbol, interval="1", limit=limit)
-                except Exception:
-                    logger.warning("%sKline warmup failed for %s", self._tag(), symbol)
-                    return
+            rows = await self._fetch_kline(symbol, "Kline warmup", limit=limit)
+            if rows is None:
+                return
             closes = normalize_klines(rows, now_ms=int(time.time() * 1000))
             feed.history.backfill_klines(symbol, closes)
             done += 1
@@ -324,21 +338,17 @@ class MarketWorker:
         if feed.rest is None:
             return
         min_len = feed.gap_backfill_min_sec
-        sem = asyncio.Semaphore(feed.kline_concurrency)
 
         async def one(symbol: str, gs: int, ge: int) -> None:
-            async with sem:
-                try:
-                    rows = await feed.rest.fetch_kline(
-                        symbol,
-                        interval="1",
-                        limit=min(1000, (ge - gs) // 60 + 4),
-                        start_ms=(gs - 120) * 1000,
-                        end_ms=ge * 1000,
-                    )
-                except Exception:
-                    logger.warning("%sGap backfill failed for %s", self._tag(), symbol)
-                    return
+            rows = await self._fetch_kline(
+                symbol,
+                "Gap backfill",
+                limit=min(1000, (ge - gs) // 60 + 4),
+                start_ms=(gs - 120) * 1000,
+                end_ms=ge * 1000,
+            )
+            if rows is None:
+                return
             closes = normalize_klines(rows, now_ms=int(time.time() * 1000))
             feed.history.backfill_klines(symbol, closes, lo_sec=gs, hi_sec=ge)
 
@@ -350,3 +360,7 @@ class MarketWorker:
         if jobs:
             logger.info("%sBackfilling %s history gaps from REST klines", self._tag(), len(jobs))
             await asyncio.gather(*jobs)
+        rewarm = feed.history.take_needs_warmup()
+        if rewarm:
+            logger.info("%sRe-warming %s symbols after a long outage", self._tag(), len(rewarm))
+            await self._warmup_symbols(rewarm)

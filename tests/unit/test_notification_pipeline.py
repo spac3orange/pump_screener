@@ -44,6 +44,46 @@ class _GoodDb:
         self.order.append(f"delivery:{signal_id}:{status.value}")
 
 
+class _PoisonDb(_GoodDb):
+    def __init__(self, poison) -> None:
+        super().__init__()
+        self.poison = poison
+
+    async def save_signal(self, signal) -> None:
+        if signal.id == self.poison:
+            raise RuntimeError("duplicate key")
+        await super().save_signal(signal)
+
+
+@pytest.mark.asyncio
+async def test_poison_item_is_dropped_and_queue_moves_on() -> None:
+    bad = make_signal(SignalType.PUMP, 720, 41.0)
+    good = make_signal(SignalType.DUMP, 900, -45.0)
+    db = _PoisonDb(bad.id)
+    persistence = PersistenceService(db, max_backoff_sec=0.001, max_attempts=3)
+    persistence.enqueue_signal(bad)
+    persistence.enqueue_delivery(bad.id, 1, DeliveryStatus.SENT)
+    persistence.enqueue_signal(good)
+    await persistence.start()
+    await asyncio.sleep(1.0)
+    assert db.order == [f"signal:{good.id}"]
+    persistence.enqueue_delivery(bad.id, 2, DeliveryStatus.SENT)
+    assert persistence.backlog == 0
+    await persistence.stop()
+
+
+def test_overflow_drops_deliveries_of_dropped_signal() -> None:
+    persistence = PersistenceService(_GoodDb(), maxsize=2)
+    first = make_signal(SignalType.PUMP, 720, 41.0)
+    second = make_signal(SignalType.DUMP, 900, -45.0)
+    persistence.enqueue_signal(first)
+    persistence.enqueue_delivery(first.id, 1, DeliveryStatus.SENT)
+    persistence.enqueue_signal(second)
+    assert persistence.backlog == 1
+    persistence.enqueue_delivery(first.id, 2, DeliveryStatus.SENT)
+    assert persistence.backlog == 1
+
+
 @pytest.mark.asyncio
 async def test_alert_is_sent_when_database_hangs() -> None:
     db = _SlowDb()

@@ -106,7 +106,11 @@ class InstrumentRegistry:
                     component="registry",
                     event="refresh_tick",
                 )
-                await self.refresh()
+                try:
+                    await self.refresh()
+                except Exception:
+                    metrics.record_error()
+                    logger.exception("%sInstrument refresh crashed", self._log_prefix)
 
     async def refresh(self) -> None:
         started = time.perf_counter()
@@ -151,16 +155,30 @@ class InstrumentRegistry:
             )
             return
 
+        accepted = [raw for raw in raw_list if self._accept(raw)]
+        old_symbols = set(self._instruments)
+        if old_symbols and len(accepted) * 2 < len(old_symbols):
+            metrics.record_error()
+            log(
+                logger,
+                logging.ERROR,
+                f"{self._log_prefix}Instrument refresh returned {len(accepted)} symbols "
+                f"(had {len(old_symbols)}); keeping previous universe",
+                component="registry",
+                event="refresh_suspicious",
+                count=len(accepted),
+            )
+            return
         filtered = [
             self._mapper(raw)
-            for raw in raw_list
-            if self._accept(raw) and str(raw.get("symbol", "")).upper() not in self._exclude_symbols
+            for raw in accepted
+            if str(raw.get("symbol", "")).upper() not in self._exclude_symbols
         ]
         new_map = {i.symbol: i for i in filtered}
-        old_symbols = set(self._instruments)
         new_symbols = set(new_map)
         added = new_symbols - old_symbols
         removed = old_symbols - new_symbols
+        previous_map = self._instruments
         self._instruments = new_map
         self._stats.instruments_active = len(self._instruments)
         duration_ms = round((time.perf_counter() - started) * 1000, 1)
@@ -192,7 +210,13 @@ class InstrumentRegistry:
                 extra={"added": sorted(added)[:20], "removed": sorted(removed)[:20]},
             )
             if self._on_change:
-                await self._on_change(filtered, added, removed)
+                try:
+                    await self._on_change(filtered, added, removed)
+                except Exception:
+                    # Next refresh sees the same diff and applies it again.
+                    self._instruments = previous_map
+                    self._stats.instruments_active = len(previous_map)
+                    raise
         else:
             log(
                 logger,

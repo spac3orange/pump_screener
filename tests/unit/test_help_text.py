@@ -96,14 +96,14 @@ def test_disabled_rule_is_marked() -> None:
     text = _text(settings)
     assert "DUMP («Дамп»): <b>выключен</b>" in text
     assert f"−40% за 15{NBSP}мин" not in text
-    assert "Dump:" not in text  # sample alert only uses enabled rules
-    assert "Drop:" in text
+    assert "Дамп:" not in text  # sample alert only uses enabled rules
+    assert "Шорт:" in text
 
 
 def test_all_down_rules_disabled_still_renders_sample() -> None:
     settings = toggle_rule(toggle_rule(ScreenerSettings(), "dump"), "short")
     parts = build_help_messages(settings)
-    assert "Pump:" in parts[1]
+    assert "Лонг:" in parts[1]
 
 
 def test_min_turnover_is_formatted() -> None:

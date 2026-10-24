@@ -71,6 +71,14 @@ class UserService:
         self._clock = clock
         self._settings = settings
         self._template: ScreenerSettings | None = None
+        # Per Telegram user: bumped before every DB read that feeds a registry write, so a
+        # snapshot read before a refund/expiry cannot overwrite the newer state after it.
+        self._sync_epoch: dict[int, int] = {}
+
+    def _bump(self, telegram_user_id: int) -> int:
+        epoch = self._sync_epoch.get(telegram_user_id, 0) + 1
+        self._sync_epoch[telegram_user_id] = epoch
+        return epoch
 
     @property
     def grace(self) -> timedelta:
@@ -115,7 +123,15 @@ class UserService:
             logger.info("Subscriber template seeded from the active monitoring profile")
         else:
             config, schema, _ = stored
-            self._template = ScreenerSettings.from_profile_config(config, schema)
+            try:
+                self._template = ScreenerSettings.from_profile_config(config, schema)
+            except ValueError:
+                # A field added to ScreenerSettings later must not stop commercial mode.
+                logger.error(
+                    "Stored subscriber template is unreadable; using the admin profile",
+                    exc_info=True,
+                )
+                self._template = seed
         await self._store.sync_admin_roles(admin_ids)
         await self.reload_registry()
 
@@ -151,6 +167,7 @@ class UserService:
     ) -> tuple[UserAccount, bool]:
         """Called for every user update; cheap when nothing changed. Returns (user, created)."""
         role = UserRole.ADMIN if is_admin else UserRole.USER
+        epoch = self._bump(telegram_user_id)
         user, created = await self._store.upsert_user(
             telegram_user_id=telegram_user_id,
             chat_id=chat_id,
@@ -168,7 +185,7 @@ class UserService:
                 schema_version=USER_CONFIG_SCHEMA_VERSION,
                 config_hash=cfg.to_settings(self.template).config_hash(),
             )
-        await self._sync(user)
+        await self._sync(user, epoch=epoch)
         return user, created
 
     async def get(self, user_id: int) -> UserAccount | None:
@@ -289,7 +306,13 @@ class UserService:
         *,
         cfg: UserDetectionConfig | None = None,
         force: bool = False,
+        epoch: int | None = None,
     ) -> None:
+        tg_id = user.telegram_user_id
+        if epoch is None:
+            epoch = self._bump(tg_id)
+        elif self._sync_epoch.get(tg_id) != epoch:
+            return  # a newer snapshot of this user is already being applied
         current = self._registry.get(user.id)
         if not self._eligible(user):
             if current is not None:
@@ -305,5 +328,24 @@ class UserService:
         ):
             return
         if cfg is None:
-            cfg = await self.get_config(user.id)
+            cfg = await self._config_for_registry(user.id)
+            if self._sync_epoch.get(tg_id) != epoch:
+                return
         self._registry.upsert(*self._entry(user, cfg))
+
+    async def _config_for_registry(self, user_id: int) -> UserDetectionConfig:
+        stored = await self._store.get_user_config(user_id)
+        if stored is not None:
+            try:
+                return UserDetectionConfig.from_stored(stored.config, stored.schema_version)
+            except ValueError:
+                return self.default_config()
+        # Profile creation failed at signup: create it now, or a restart drops the user.
+        cfg = self.default_config()
+        await self._store.ensure_profile(
+            user_id,
+            config=cfg.model_dump(mode="json"),
+            schema_version=USER_CONFIG_SCHEMA_VERSION,
+            config_hash=cfg.to_settings(self.template).config_hash(),
+        )
+        return cfg

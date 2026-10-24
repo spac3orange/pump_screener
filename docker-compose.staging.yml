@@ -3,10 +3,17 @@
 # .env.staging must use a separate BotFather bot (TELEGRAM_BOT_TOKEN) — never the production one.
 name: pump_screener_staging
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: screener
       POSTGRES_PASSWORD: screener
@@ -22,6 +29,7 @@ services:
   app:
     build: .
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy

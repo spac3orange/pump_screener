@@ -72,6 +72,15 @@ def test_small_gap_within_tolerance_keeps_window_valid() -> None:
     assert h.lookup("AUSDT", now_ms=_sec(162), interval_sec=60).price == 100.0  # type: ignore[union-attr]
 
 
+def test_outage_longer_than_capacity_asks_for_warmup() -> None:
+    h = PriceHistoryManager(capacity_sec=120)
+    h.record("CUSDT", ts_ms=_sec(0), price=100.0)
+    h.mark_disconnected(["CUSDT"], at_ts_ms=_sec(0))
+    h.record("CUSDT", ts_ms=_sec(500), price=100.0)
+    assert h.take_needs_warmup() == ["CUSDT"]
+    assert h.take_needs_warmup() == []
+
+
 def test_large_gap_invalidates_only_crossing_windows() -> None:
     h = PriceHistoryManager()
     for s in range(0, 100):

@@ -66,10 +66,39 @@ from screener.workers.market_worker import MarketWorker
 logger = logging.getLogger(__name__)
 
 
-def run_migrations(database_url: str) -> None:
+async def _stop_step(name: str, aw) -> None:
+    try:
+        await aw
+    except Exception:
+        logger.exception("Shutdown step %s failed", name)
+
+
+def _alembic_config(database_url: str) -> Config:
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(cfg, "head")
+    # Keep the app's logging handlers (JSON, levels) instead of alembic.ini's.
+    cfg.attributes["skip_logging_config"] = True
+    return cfg
+
+
+def run_migrations(database_url: str) -> None:
+    command.upgrade(_alembic_config(database_url), "head")
+
+
+async def ensure_schema_at_head(engine, database_url: str) -> None:
+    """AUTO_MIGRATE=false: refuse to start on a schema the code does not match."""
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import text
+
+    heads = set(ScriptDirectory.from_config(_alembic_config(database_url)).get_heads())
+    async with engine.connect() as conn:
+        rows = await conn.execute(text("SELECT version_num FROM alembic_version"))
+        current = {row[0] for row in rows}
+    if current != heads:
+        raise RuntimeError(
+            f"Database schema is at {sorted(current) or 'nothing'}, code expects {sorted(heads)}; "
+            "run `alembic upgrade head` before starting (AUTO_MIGRATE=false)"
+        )
 
 
 async def build_runtime(
@@ -83,6 +112,8 @@ async def build_runtime(
         logger.info("AUTO_MIGRATE=false: schema migrations are applied manually")
 
     engine = create_engine(system.database_url)
+    if not system.auto_migrate:
+        await ensure_schema_at_head(engine, system.database_url)
     session_factory = create_session_factory(engine)
     repo = Repository(session_factory)
 
@@ -220,6 +251,8 @@ async def build_runtime(
         state.feeds[BITGET] = bitget_feed
         workers.append(MarketWorker(state, feed=bitget_feed))
         bitget_feed.evaluate_admin = BITGET in state.admin_exchanges
+    # Feeds above were built after the first apply: give them profile context and exclusions.
+    state.apply_profile(active_profile, False)
 
     tg: TelegramBotService | None = None
     if system.telegram_bot_token and system.admin_id:
@@ -462,25 +495,26 @@ def build_fastapi() -> FastAPI:
                 component="main",
                 event="shutdown",
             )
+            # One failing step must not skip the rest (e.g. persistence drain).
             for worker in reversed(workers):
-                await worker.stop()
+                await _stop_step(f"worker-{worker.feed.exchange}", worker.stop())
             if state.commercial is not None:
-                await state.commercial.stop()
+                await _stop_step("commercial", state.commercial.stop())
             if lifecycle_runtime is not None:
-                await lifecycle_runtime.stop()
+                await _stop_step("lifecycle", lifecycle_runtime.stop())
             if state.trading is not None:
-                await state.trading.stop()
-            await state.notifications.stop()
+                await _stop_step("trading", state.trading.stop())
+            await _stop_step("notifications", state.notifications.stop())
             if tg is not None:
-                await tg.stop()
-            await state.persistence.stop()
+                await _stop_step("telegram", tg.stop())
+            await _stop_step("persistence", state.persistence.stop())
             for feed in state.feeds.values():
                 if feed.rest is not None and feed.rest is not state.rest:
-                    await feed.rest.aclose()
-            await state.rest.aclose()
+                    await _stop_step(f"rest-{feed.exchange}", feed.rest.aclose())
+            await _stop_step("rest", state.rest.aclose())
             engine = state.extras.get("engine")
             if engine is not None:
-                await engine.dispose()
+                await _stop_step("db", engine.dispose())
 
     return create_app(None, lifespan=lifespan)
 

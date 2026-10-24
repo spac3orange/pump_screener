@@ -59,7 +59,7 @@ def test_pump_message_matches_screen_layout() -> None:
     text = format_signal_message(signal, signals_24h=1)
     assert text == (
         f'{BYBIT} – 30M – <a href="https://www.bybit.com/trade/usdt/RSRUSDT">RSR</a>\n'
-        "🔴 Pump: 49.27% (0.0016619-0.0024808)\n"
+        "🟢 Лонг: 49.27% (0.0016619-0.0024808)\n"
         "🔉 Signal 24h: 1"
     )
 
@@ -70,8 +70,20 @@ def test_dump_message_uses_triangle_and_minus() -> None:
     assert text.startswith(
         f'{BYBIT} – 15M – <a href="https://www.bybit.com/trade/usdt/ETHUSDT">ETH</a>\n'
     )
-    assert "🔻 Dump: -40.00%" in text
+    assert "🔻 Дамп: -40.00%" in text
     assert text.endswith("🔉 Signal 24h: 2")
+
+
+def test_admin_alert_names_auto_trading_side() -> None:
+    signal = make_signal(SignalType.PUMP, 720, 41.0)
+    assert format_signal_message(signal).count("Автоторговля") == 0
+    text = format_signal_message(signal, trade_action="SHORT")
+    assert text.endswith("🔉 Signal 24h: 1\n🤖 Автоторговля: SHORT")
+
+
+def test_short_message_uses_red_circle() -> None:
+    signal = make_signal(SignalType.DROP, 1800, -10.09, prev_price=0.0114, price=0.01025)
+    assert "🔴 Шорт: -10.09% (0.0114-0.01025)" in format_signal_message(signal)
 
 
 def test_correlated_signal_shows_only_the_primary_rule() -> None:
@@ -90,6 +102,6 @@ def test_correlated_signal_shows_only_the_primary_rule() -> None:
     )
     assert format_signal_message(signal, signals_24h=1) == (
         f'{BYBIT} – 15M – <a href="https://www.bybit.com/trade/usdt/XYZUSDT">XYZ</a>\n'
-        "🔻 Dump: -42.10% (0.5-0.2895)\n"
+        "🔻 Дамп: -42.10% (0.5-0.2895)\n"
         "🔉 Signal 24h: 1"
     )

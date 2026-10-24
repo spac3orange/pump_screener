@@ -179,6 +179,7 @@ def _settings_text(settings: ScreenerSettings, profile_name: str | None = None) 
             settings.short_threshold_pct,
             settings.short_interval_sec,
             settings.enable_short,
+            signed=True,
         ),
         _rule_line(
             "🔻",
@@ -216,11 +217,25 @@ def _settings_screen(state: AppState) -> tuple[str, InlineKeyboardMarkup]:
     )
 
 
+def _running_exchanges(state: AppState) -> str:
+    feeds = frozenset(getattr(state, "feeds", {}))
+    return exchanges_label(feeds) if feeds else "Bybit"
+
+
+def _instruments_total(snap: dict) -> int:
+    """Bybit counter lives at the top level; other exchanges under ``feeds``."""
+    total = int(snap.get("instruments_active") or 0)
+    for code, data in (snap.get("feeds") or {}).items():
+        if code != BYBIT:
+            total += int(data.get("instruments_active") or 0)
+    return total
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: AppState) -> None:
     await message.answer(
         "<b>Bybit Market Screener</b>\n"
-        "Мониторинг crypto USDT Linear Perpetual на Bybit, Binance и Bitget: "
+        f"Мониторинг crypto USDT Linear Perpetual на {_running_exchanges(state)}: "
         "лонг, шорт и дамп.\n\n"
         "Команды:\n"
         "/status — состояние\n"
@@ -242,7 +257,7 @@ async def cmd_trading(message: Message, state: AppState) -> None:
 async def cmd_help(message: Message, state: AppState) -> None:
     parts = build_help_messages(
         state.signal_engine.settings,
-        instruments=metrics.snapshot()["instruments_active"],
+        instruments=_instruments_total(metrics.snapshot()),
     )
     for part in parts:
         await message.answer(part)
@@ -275,8 +290,8 @@ async def cmd_status(message: Message, state: AppState) -> None:
         "<b>Статус</b>\n"
         f"{profile}"
         f"Ready: {snap['ready']}\n"
-        f"Instruments: {snap['instruments_active']}\n"
-        f"WS connections: {snap['ws_connections']}\n"
+        f"Bybit instruments: {snap['instruments_active']}\n"
+        f"Bybit WS connections: {snap['ws_connections']}\n"
         f"Msg/s: {snap['messages_per_sec']}\n"
         f"Live price/s: {snap['rates'].get('live_price_events_per_sec', 0.0)}\n"
         f"Signals (runtime): {snap['signals_total']}\n"
@@ -454,10 +469,14 @@ async def on_trading_action(query: CallbackQuery, state: AppState) -> None:
         await query.answer("Торговля выключена")
         return
 
+    if action == "on" and trading.settings.bybit_trading_mode == "mainnet":
+        # Only the explicit confirmation button may turn MAINNET on.
+        action = "enable_ask"
+
     if action == "on":
         err = await trading.set_enabled(True, chat_id=chat_id)
         if err:
-            await query.answer(f"Не удалось: {err}", show_alert=True)
+            await query.answer(f"Не удалось: {err}"[:190], show_alert=True)
             return
         await _edit_trading_panel(query, trading, force=True, lifecycle=state.lifecycle)
         await query.answer("Торговля включена")
@@ -484,10 +503,9 @@ async def on_trading_action(query: CallbackQuery, state: AppState) -> None:
         if not trading.mainnet_confirm_armed():
             await query.answer("Подтверждение истекло. Запросите снова.", show_alert=True)
             return
-        trading.arm_mainnet_confirm(ttl_sec=60.0)
         err = await trading.set_enabled(True, chat_id=chat_id)
         if err:
-            await query.answer(f"Не удалось: {err}", show_alert=True)
+            await query.answer(f"Не удалось: {err}"[:190], show_alert=True)
             return
         if query.message is not None:
             await query.message.edit_text("MAINNET торговля включена.")
@@ -501,10 +519,13 @@ async def on_trading_action(query: CallbackQuery, state: AppState) -> None:
 async def on_toggle_exchange(query: CallbackQuery, state: AppState) -> None:
     assert query.data is not None
     code = query.data.split(":", 1)[1]
-    nxt = toggle_exchange(frozenset(state.admin_exchanges), code)
+    nxt = toggle_exchange(
+        frozenset(state.admin_exchanges), code, frozenset(getattr(state, "feeds", {}))
+    )
     if nxt is None:
         await query.answer(
-            "Нельзя выключить последнюю биржу. Все сигналы выключаются выключением мониторинга.",
+            "Нельзя выключить последнюю работающую биржу. "
+            "Чтобы остановить сигналы, выключите правила в /settings.",
             show_alert=True,
         )
         return
@@ -527,7 +548,7 @@ async def on_toggle_rule(query: CallbackQuery, state: AppState) -> None:
     try:
         await state.apply_settings(updated, chat_id=query.from_user.id)
     except ProfileError as exc:
-        await query.answer(str(exc), show_alert=True)
+        await query.answer(str(exc)[:190], show_alert=True)
         return
     if query.message is not None:
         text, markup = _settings_screen(state)
@@ -573,7 +594,7 @@ async def on_setting_value(message: Message, state: AppState) -> None:
         )
     except SettingInputError as exc:
         hint = prompt_for(kind, field_name, state.signal_engine.settings)
-        await message.answer(f"{exc}\n{hint}")
+        await message.answer(f"{html.escape(str(exc))}\n{hint}")
         return
     state.clear_pending_edit(message.from_user.id)
     try:

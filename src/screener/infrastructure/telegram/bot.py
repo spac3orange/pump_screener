@@ -47,6 +47,7 @@ USER_COMMANDS = [
     BotCommand(command="subscription", description="Подписка и оплата"),
     BotCommand(command="help", description="Справка"),
     BotCommand(command="support", description="Поддержка"),
+    BotCommand(command="paysupport", description="Вопросы по оплате"),
     BotCommand(command="terms", description="Условия"),
 ]
 
@@ -66,6 +67,7 @@ COMMERCIAL_ADMIN_COMMANDS = [
     BotCommand(command="admin_stats", description="Пользователи и оплаты"),
     BotCommand(command="admin_users", description="Кто запускал бота: id и ник"),
     BotCommand(command="admin_refund", description="Возврат Stars по charge_id"),
+    BotCommand(command="account", description="Мой аккаунт подписчика"),
 ]
 
 
@@ -155,7 +157,9 @@ class TelegramBotService:
         await self.send_to_chat(user.chat_id, access_ended_text(user, commercial.settings))
 
     async def send_signal(self, chat_id: int, signal: MarketSignal, signals_24h: int = 1) -> None:
-        text = format_signal_message(signal, signals_24h=signals_24h)
+        trading = self._app_state.trading
+        action = trading.planned_action(signal) if trading is not None else None
+        text = format_signal_message(signal, signals_24h=signals_24h, trade_action=action)
         await self._send_with_retry(chat_id, text)
 
     async def broadcast_text(self, text: str) -> None:

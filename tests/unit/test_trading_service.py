@@ -85,6 +85,10 @@ class FakeRepo:
         self.reserved: set = set()
         self.updates: list[tuple] = []
         self.enabled = False
+        self.tracked: dict[str, object] = {}
+
+    async def find_tracked_trade(self, symbol, mode):
+        return self.tracked.get(symbol)
 
     async def try_reserve(self, *, signal_id, **kwargs) -> bool:
         if signal_id in self.reserved:
@@ -357,6 +361,39 @@ async def test_timeout_reconciles_without_second_create() -> None:
     svc._enabled = True
     await svc._handle(_signal())
     assert gw.place_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_unclosed_previous_trade_skips_new_entry() -> None:
+    gw = FakeGateway()
+    repo = FakeRepo()
+    repo.tracked["BTCUSDT"] = object()
+    svc = TradingService(_settings(), repo, gateway=gw)  # type: ignore[arg-type]
+    svc._ready = True
+    svc._enabled = True
+    await svc._handle(_signal())
+    assert gw.place_calls == 0
+    assert any(u[1].get("skip_reason") == "previous_trade_not_closed" for u in repo.updates)
+
+
+def test_entry_path_never_untracks_a_filled_position() -> None:
+    from screener.domain.trading import entry_status_change_allowed
+
+    assert entry_status_change_allowed("RESERVED", "FILLED")
+    assert entry_status_change_allowed("FILLED", "PROTECTIVE_FAILED")
+    assert not entry_status_change_allowed("FILLED", "FAILED")
+    assert not entry_status_change_allowed("OPEN", "PROTECTIVE_FAILED")
+    assert not entry_status_change_allowed("CLOSED", "FILLED")
+
+
+def test_planned_action_follows_configured_side_only_when_trading() -> None:
+    svc = TradingService(_settings(), FakeRepo(), gateway=FakeGateway())  # type: ignore[arg-type]
+    assert svc.planned_action(_signal(SignalType.PUMP)) is None
+    svc._ready = True
+    svc._enabled = True
+    assert svc.planned_action(_signal(SignalType.PUMP)) == "SHORT"
+    assert svc.planned_action(_signal(SignalType.DUMP)) == "LONG"
+    assert svc.planned_action(_signal(SignalType.DROP)) is None
 
 
 def test_enqueue_ignores_non_bybit_signals() -> None:

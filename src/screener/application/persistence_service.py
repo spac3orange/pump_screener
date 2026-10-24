@@ -14,6 +14,8 @@ from screener.domain.models import MarketSignal
 
 logger = logging.getLogger(__name__)
 
+_LOST_SIGNALS_MAX = 10_000
+
 
 class SignalStore(Protocol):
     async def save_signal(self, signal: MarketSignal) -> None: ...
@@ -50,12 +52,17 @@ class PersistenceService:
         maxsize: int = 10_000,
         op_timeout_sec: float = 10.0,
         max_backoff_sec: float = 30.0,
+        max_attempts: int = 20,
     ) -> None:
         self._store = store
         self._maxsize = maxsize
         self._op_timeout = op_timeout_sec
         self._max_backoff = max_backoff_sec
+        self._max_attempts = max_attempts
         self._items: deque[MarketSignal | _Delivery] = deque()
+        # Deliveries of a signal that was never written would violate the FK forever.
+        self._lost_signals: deque[UUID] = deque(maxlen=_LOST_SIGNALS_MAX)
+        self._lost_signal_set: set[UUID] = set()
         self._wake = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
 
@@ -66,11 +73,27 @@ class PersistenceService:
     def _push(self, item: MarketSignal | _Delivery) -> None:
         if self._store is None:
             return
-        if len(self._items) >= self._maxsize:
-            self._items.popleft()
+        if isinstance(item, _Delivery) and item.signal_id in self._lost_signal_set:
             metrics.persistence_drops_total += 1
+            return
+        if len(self._items) >= self._maxsize:
+            self._drop(self._items.popleft())
         self._items.append(item)
         self._wake.set()
+
+    def _drop(self, item: MarketSignal | _Delivery) -> None:
+        metrics.persistence_drops_total += 1
+        if not isinstance(item, MarketSignal):
+            return
+        if len(self._lost_signals) == self._lost_signals.maxlen:
+            self._lost_signal_set.discard(self._lost_signals[0])
+        self._lost_signals.append(item.id)
+        self._lost_signal_set.add(item.id)
+        self._items = deque(
+            i
+            for i in self._items
+            if not (isinstance(i, _Delivery) and i.signal_id == item.id)
+        )
 
     def enqueue_signal(self, signal: MarketSignal) -> None:
         self._push(signal)
@@ -108,6 +131,7 @@ class PersistenceService:
 
     async def _loop(self) -> None:
         backoff = 0.5
+        attempts = 0
         while True:
             if not self._items:
                 self._wake.clear()
@@ -120,10 +144,24 @@ class PersistenceService:
                 raise
             except Exception:
                 metrics.persistence_failures_total += 1
+                attempts += 1
+                if attempts >= self._max_attempts:
+                    logger.error(
+                        "Persistence gave up on %s after %d attempts",
+                        type(item).__name__,
+                        attempts,
+                        exc_info=True,
+                    )
+                    if self._items and self._items[0] is item:
+                        self._items.popleft()
+                        self._drop(item)
+                    attempts = 0
+                    continue
                 logger.warning("Persistence failed; retrying in %.1fs", backoff, exc_info=True)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, self._max_backoff)
                 continue
             backoff = 0.5
+            attempts = 0
             if self._items and self._items[0] is item:
                 self._items.popleft()

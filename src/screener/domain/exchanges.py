@@ -55,13 +55,20 @@ def normalize_exchanges(values: object) -> frozenset[str]:
     return frozenset(v for v in values if v in EXCHANGES)
 
 
-def toggle_exchange(current: frozenset[str], code: str) -> frozenset[str] | None:
-    """Return the new set, or ``None`` if this would turn off the last exchange."""
+def toggle_exchange(
+    current: frozenset[str], code: str, available: frozenset[str] | None = None
+) -> frozenset[str] | None:
+    """Return the new set, or ``None`` if this would turn off the last exchange.
+
+    ``available`` = exchanges whose feed runs; an enabled but stopped feed sends nothing,
+    so it does not count as the remaining one.
+    """
     if code not in EXCHANGES:
         return current
     if code in current:
         nxt = current - {code}
-        return None if not nxt else nxt
+        alive = nxt if available is None else nxt & available
+        return None if not alive else nxt
     return current | {code}
 
 

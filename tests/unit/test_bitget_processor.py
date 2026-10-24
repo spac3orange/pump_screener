@@ -57,6 +57,14 @@ def test_out_of_order_envelope_ts_is_dropped() -> None:
     assert proc.last_price("BTCUSDT") == 100.0
 
 
+def test_new_price_with_same_envelope_ts_is_live() -> None:
+    proc, stats = _proc("BTCUSDT")
+    proc.apply_message(_frame("BTCUSDT", 2000, "100"))
+    events = proc.apply_message(_frame("BTCUSDT", 2000, "101"))
+    assert events is not None and events[0].kind is PriceEventKind.LIVE
+    assert stats.out_of_order_total == 0
+
+
 def test_unknown_symbol_is_ignored() -> None:
     proc, stats = _proc("BTCUSDT")
     events = proc.apply_message(_frame("ETHUSDT", 1000, "1"))

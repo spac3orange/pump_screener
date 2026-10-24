@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 NotifyFunc = Callable[[str], Awaitable[None]]
 
 _INSTRUMENT_CACHE_MAX = 256
+_PREFLIGHT_RETRY_MIN_SEC = 30.0
+_PREFLIGHT_RETRY_MAX_SEC = 600.0
 
 
 @dataclass(slots=True)
@@ -146,6 +148,17 @@ class TradingService:
         """Called with the symbol right after an entry fill is persisted."""
         self._position_listener = listener
 
+    def planned_action(self, signal: MarketSignal) -> str | None:
+        """Side auto-trading will try for this signal, or ``None`` if it will not trade."""
+        from screener.domain.exchanges import TRADING_EXCHANGE
+
+        if getattr(signal, "exchange", TRADING_EXCHANGE) != TRADING_EXCHANGE:
+            return None
+        if not (self.settings.enabled_module and self._enabled and self._ready):
+            return None
+        action = self.settings.action_for(signal.signal_type.value)
+        return None if action == TradeAction.IGNORE.value else action
+
     def enqueue(self, signal: MarketSignal) -> None:
         from screener.domain.exchanges import TRADING_EXCHANGE
 
@@ -248,6 +261,12 @@ class TradingService:
 
         metrics.trading_ready = self._ready
         self._tasks.append(supervise("trading-worker", self._loop))
+        if not self._ready:
+            task = asyncio.get_running_loop().create_task(
+                self._preflight_retry_loop(), name="trading-preflight-retry"
+            )
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
         log(
             logger,
             logging.WARNING if persisted and not self._enabled else logging.INFO,
@@ -285,6 +304,29 @@ class TradingService:
         if self._gateway is not None:
             await self._gateway.close()
 
+    async def _preflight_retry_loop(self) -> None:
+        """A Bybit blip at boot must not leave trading unusable until the next restart."""
+        delay = _PREFLIGHT_RETRY_MIN_SEC
+        while not self._ready and self._ready_reason.startswith("preflight:"):
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _PREFLIGHT_RETRY_MAX_SEC)
+            try:
+                await self._preflight()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._ready_reason = f"preflight:{exc}"
+                logger.warning("Trading preflight retry failed: %s", exc)
+                continue
+            self._ready = True
+            self._ready_reason = "ok"
+            metrics.trading_ready = True
+            logger.info("Trading preflight succeeded on retry")
+            await self._notify_text(
+                "✅ Торговый модуль готов (проверка Bybit прошла после повторной попытки).\n"
+                f"Trading: {'ON' if self._enabled else 'OFF'}"
+            )
+
     async def _preflight(self) -> None:
         assert self._gateway is not None
         info = await self._gateway.get_api_key_info()
@@ -308,6 +350,7 @@ class TradingService:
         if enabled:
             self._enabled = True
             metrics.trading_enabled = True
+            self._mainnet_confirm_until = 0.0  # one confirmation = one enable
         else:
             self._disable("telegram_off")
         log(
@@ -583,6 +626,16 @@ class TradingService:
             )
             metrics.trade_signals_skipped_total += 1
             return
+        # Bybit may already be flat while the lifecycle monitor has not closed the old row
+        # yet; a new entry would then be finalized with the old trade's fills.
+        if await self._repo.find_tracked_trade(signal.symbol, self.settings.bybit_trading_mode):
+            await self._repo.update_execution(
+                signal.id,
+                status=ExecutionStatus.SKIPPED.value,
+                skip_reason="previous_trade_not_closed",
+            )
+            metrics.trade_signals_skipped_total += 1
+            return
 
         open_positions = await gw.list_open_positions()
         if len(open_positions) >= self.settings.max_open_positions:
@@ -770,7 +823,7 @@ class TradingService:
                 )
                 await self._notify_text(
                     f"❌ Ошибка исполнения\n{signal.symbol}\n"
-                    f"Позиция открыта, но TP/SL не установлены\n{exc}"
+                    f"Позиция открыта, но TP/SL не установлены\n{html.escape(str(exc)[:500])}"
                 )
 
         if protective_ok:

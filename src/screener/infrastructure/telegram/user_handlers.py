@@ -328,10 +328,12 @@ async def u_settings_action(
         return
 
     if action == "x" and len(parts) == 3:
-        nxt = toggle_exchange(account.enabled_exchanges, parts[2])
+        nxt = toggle_exchange(
+            account.enabled_exchanges, parts[2], frozenset(getattr(state, "feeds", {}))
+        )
         if nxt is None:
             await query.answer(
-                "Нельзя выключить последнюю биржу. Все сигналы выключаются в /account.",
+                "Нельзя выключить последнюю работающую биржу. Все сигналы выключаются в /account.",
                 show_alert=True,
             )
             return

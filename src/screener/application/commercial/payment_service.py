@@ -26,6 +26,7 @@ from screener.domain.commercial import (
     PaymentInput,
     SubscriptionInfo,
     UserAccount,
+    UserStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,8 @@ class PaymentService:
         user = await self._store.get_user_by_telegram(telegram_user_id)
         if user is None or user.id != invoice.user_id:
             return "Этот счёт выставлен другому пользователю."
+        if user.status is UserStatus.BANNED:
+            return "Оплата недоступна для этого аккаунта."
         if currency != STARS_CURRENCY or total_amount != invoice.amount_stars:
             return "Сумма счёта не совпадает. Создайте новый счёт."
         if invoice.status not in (InvoiceStatus.CREATED, InvoiceStatus.PRE_CHECKOUT_OK):
@@ -220,6 +223,18 @@ class PaymentService:
                     raise
                 await asyncio.sleep(APPLY_RETRY_BASE_SEC * 2**attempt)
         renewal = payment.is_recurring and not payment.is_first_recurring
+        if result.duplicate and attempt > 0:
+            # Our earlier attempt committed but reported an error: finish it, don't hide it.
+            user = await self._store.get_user_by_telegram(payment.telegram_user_id)
+            if user is not None:
+                refreshed = await self._users.refresh(user.id) or user
+                logger.info("Payment applied on an earlier attempt user_id=%s", user.id)
+                return PaymentOutcome(
+                    applied=True,
+                    renewal=renewal,
+                    user=refreshed,
+                    period_end=refreshed.access_until,
+                )
         if result.duplicate:
             metrics.payments_duplicate_total += 1
             logger.info("Duplicate successful_payment ignored")
@@ -249,7 +264,9 @@ class PaymentService:
                 f"reason: <code>{decision.anomaly}</code>\n"
                 f"tg_user: <code>{payment.telegram_user_id}</code>\n"
                 f"amount: {payment.total_amount} {payment.currency}\n"
-                "Проверьте и при необходимости сделайте /admin_refund."
+                f"charge: <code>{payment.telegram_payment_charge_id}</code>\n"
+                "Доступ не выдан. /admin_refund такой платёж не найдёт: верните Stars через "
+                "Bot API refundStarPayment (см. docs/COMMERCIAL_RUNBOOK.md, раздел 4)."
             )
             return PaymentOutcome(
                 applied=False, anomaly=decision.anomaly, renewal=renewal, user=result.user

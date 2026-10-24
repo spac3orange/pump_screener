@@ -1,10 +1,13 @@
 # Bybit Market Screener
 
-Real-time monitor for **crypto USDT Linear Perpetual** contracts on Bybit.
+Real-time monitor for **crypto USDT Linear Perpetual** contracts on Bybit, Binance (USDⓈ-M)
+and Bitget (USDT-M).
 
-Detects Pump / Drop / Dump signals (on `lastPrice`) from public ticker streams, stores history in PostgreSQL, and notifies via Telegram.
+Detects Лонг (rise) / Шорт (fall) / Дамп (sharp fall) signals on `lastPrice` from public
+ticker streams, stores signals in PostgreSQL, and notifies via Telegram.
 
-> MVP does **not** place orders. No trading API keys required.
+> Auto-trading is **optional and Bybit only** (`BYBIT_TRADING_MODE=disabled|demo|mainnet`).
+> The screener works without any trading API keys; Binance and Bitget are signals only.
 
 ## Stack
 
@@ -31,7 +34,10 @@ curl http://localhost:8000/readyz
 3. Restart: `docker compose up -d --build app`.
 4. Open the bot in Telegram and send `/start`.
 
-Only users listed in `ADMIN_ID` can use commands and receive signal alerts. Multiple admins: `ADMIN_ID=111,222`.
+With `COMMERCIAL_ENABLED=false` only users listed in `ADMIN_ID` can use the bot. With
+`COMMERCIAL_ENABLED=true` anyone can start it as a subscriber (trial / Telegram Stars
+subscription, see [`docs/COMMERCIAL_RUNBOOK.md`](docs/COMMERCIAL_RUNBOOK.md)); admin commands
+stay limited to `ADMIN_ID`. Multiple admins: `ADMIN_ID=111,222`.
 
 ## Local development
 
@@ -65,12 +71,14 @@ pytest -q
 
 ## Telegram commands
 
-`/start` `/status` `/settings` `/profiles` `/signals` `/stats` `/trading` `/help`
+Admin: `/start` `/status` `/settings` `/profiles` `/signals` `/stats` `/trading` `/help`;
+commercial mode adds `/admin_stats` `/admin_users` `/admin_refund <charge_id>` `/account`.
+
+Subscribers (commercial mode): `/start` `/account` `/settings` `/subscription` `/help`
+`/support` `/paysupport` `/terms`.
 
 Detection rules live in named, versioned **monitoring profiles** stored in PostgreSQL
 (`/profiles`). `.env` screener values only seed the system `Default` profile on first start.
-
-Only Telegram user IDs listed in `ADMIN_ID` are accepted.
 
 ## Deploy on Debian VPS
 
@@ -89,12 +97,16 @@ Recommended: **2 vCPU / 4 GB RAM / 20–40 GB SSD**.
 
 See [`.env.example`](.env.example).
 
-- **System**: DB URL, Bybit endpoints, Telegram token, WS shard size.
-- **Screener rules**: thresholds, intervals, cooldown — env defaults, overridable via Telegram `/settings` (stored in `screener_settings`).
+- **System**: DB URL, exchange endpoints (`BINANCE_ENABLED`, `BITGET_ENABLED`), Telegram token,
+  WS shard size.
+- **Screener rules**: thresholds, intervals, cooldown — env values seed the `Default` monitoring
+  profile once; after that edit them in Telegram `/settings` / `/profiles`.
+- **Production**: set `AUTO_MIGRATE=false` and run `alembic upgrade head` yourself; the app then
+  refuses to start on a schema that does not match the code.
 
 ## Signal price source
 
-Pump/Dump use **lastPrice** only (never mark/index).
+All signals use **lastPrice** only (never mark/index).
 
 ## License
 

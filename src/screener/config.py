@@ -131,7 +131,7 @@ class SystemSettings(BaseSettings):
     # Gaps after reconnect longer than this are restored from REST 1m klines.
     gap_backfill_min_sec: int = Field(default=60, ge=5)
     signal_count_db_timeout_sec: float = Field(default=2.0, gt=0)
-    # false: the app refuses to start on a schema behind head; run `alembic upgrade head` manually.
+    # false: the app refuses to start unless the schema is at head; run `alembic upgrade head`.
     auto_migrate: bool = True
 
     telegram_bot_token: str = ""
@@ -238,7 +238,7 @@ class TradingSettings(BaseSettings):
     drop_action: str = "IGNORE"
     dump_action: str = "LONG"
 
-    bybit_leverage: float = Field(default=3.0, gt=0)
+    bybit_leverage: float = Field(default=3.0, gt=0, le=100)
     trade_margin_pct: float = Field(default=2.0, gt=0, le=100)
     order_sizing_price: str = "markPrice"
     entry_order_type: str = "MARKET"
@@ -246,11 +246,12 @@ class TradingSettings(BaseSettings):
     existing_position_policy: str = "skip"
 
     stop_loss_enabled: bool = True
-    stop_loss_pct: float = Field(default=3.0, gt=0)
+    # Below 100: a LONG stop or a SHORT target at -100% would be a price of zero.
+    stop_loss_pct: float = Field(default=3.0, gt=0, lt=100)
     take_profit_enabled: bool = True
-    take_profit_pct: float = Field(default=5.0, gt=0)
-    tp_trigger_by: str = "MarkPrice"
-    sl_trigger_by: str = "MarkPrice"
+    take_profit_pct: float = Field(default=5.0, gt=0, lt=100)
+    tp_trigger_by: Literal["MarkPrice", "LastPrice", "IndexPrice"] = "MarkPrice"
+    sl_trigger_by: Literal["MarkPrice", "LastPrice", "IndexPrice"] = "MarkPrice"
 
     max_signal_age_seconds: float = Field(default=30.0, gt=0)
     trading_queue_maxsize: int = Field(default=1000, ge=10)

@@ -108,7 +108,10 @@ class BinanceTickerStream:
                     self._last_frame_mono = time.monotonic()
                     self._stats.ws_connections = 1
                     if self.on_connect is not None:
-                        self.on_connect(self.symbols)
+                        try:
+                            self.on_connect(self.symbols)
+                        except Exception:
+                            logger.exception("Binance WS on_connect callback failed")
                     backoff = 1.0
                     watch = asyncio.create_task(self._watchdog(ws))
                     try:
@@ -149,7 +152,10 @@ class BinanceTickerStream:
         self._connected = False
         self._stats.ws_connections = 0
         if connected_once and was_connected and self.on_disconnect is not None:
-            self.on_disconnect(self.symbols, self._last_exchange_ts_ms)
+            try:
+                self.on_disconnect(self.symbols, self._last_exchange_ts_ms)
+            except Exception:
+                logger.exception("Binance WS on_disconnect callback failed")
 
     async def _watchdog(self, ws) -> None:
         while True:

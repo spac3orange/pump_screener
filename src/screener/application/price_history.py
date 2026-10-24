@@ -62,16 +62,25 @@ class PriceHistoryManager:
     def __init__(self, *, capacity_sec: int = DEFAULT_CAPACITY_SEC) -> None:
         self._cap = capacity_sec
         self._rings: dict[str, _Ring] = {}
+        self._needs_warmup: set[str] = set()
 
     @property
     def capacity_sec(self) -> int:
         return self._cap
 
+    def take_needs_warmup(self) -> list[str]:
+        """Symbols whose history was dropped after an outage longer than the capacity."""
+        symbols = sorted(self._needs_warmup)
+        self._needs_warmup.clear()
+        return symbols
+
     def clear(self, symbol: str | None = None) -> None:
         if symbol is None:
             self._rings.clear()
+            self._needs_warmup.clear()
         else:
             self._rings.pop(symbol, None)
+            self._needs_warmup.discard(symbol)
 
     def _ring(self, symbol: str) -> _Ring:
         ring = self._rings.get(symbol)
@@ -124,6 +133,8 @@ class PriceHistoryManager:
 
         gap_len = sec - last - 1
         if gap_len >= self._cap:
+            if ring.broken:
+                self._needs_warmup.add(symbol)
             ring.reset()
             self._fill(ring, sec, sec, price, code)
             ring.first_sec = ring.last_sec = sec

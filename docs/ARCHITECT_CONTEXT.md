@@ -210,19 +210,18 @@ change% = (lastPrice_now − price_at_window_start) / price_at_window_start × 1
 
 Рендер: `infrastructure/telegram/formatter.py` → `format_signal_message`.
 
-Пример (несколько правил):
+Пример (в сообщении только основное правило):
 
 ```
 ByBit – 15M – ABC
-🔻 Dump: -42.00% (1-0.58)
-🔴 Drop 30M: -47.00% (1.09434-0.58)
-Signal 24h: 1
+🔻 Дамп: -42.00% (1-0.58)
+🔉 Signal 24h: 1
 ```
 
 - первая цена в скобках — ориентир начала окна;
 - вторая — `lastPrice` на момент детекта;
 - `Signal 24h` — число уведомлений по символу за 24ч, включая текущее (merged alert = 1);
-- эмодзи в алерте: Pump/Drop = 🔴, Dump = 🔻 (не совпадает 1:1 с `/settings` 🟢/🔴/🔻).
+- подписи и эмодзи совпадают с `/settings`: PUMP = 🟢 Лонг, DROP = 🔴 Шорт, DUMP = 🔻 Дамп. Это название правила, а не действие автоторговли (`PUMP_ACTION`, `DROP_ACTION`, `DUMP_ACTION`).
 
 Ссылка на торговлю: `https://www.bybit.com/trade/usdt/{symbol}` (есть helper, в текущем тексте алерта может не использоваться — смотреть formatter).
 
@@ -507,7 +506,7 @@ docker logs pumpscreener-app-1
 3. После рестарта/долгого обрыва reference price может быть MIXED (REST kline) — приблизительная.
 4. Dedup/корреляция — эвристики; независимые по времени DROP затем DUMP могут прийти двумя сообщениями.
 5. MVP single-process; горизонтального шардинга приложения нет (только WS shard connections).
-6. В алерте эмодзи Pump/Drop одинаковые (🔴) — исторический Bybit-like формат.
+6. Подпись «Лонг» / «Шорт» в алерте — имя правила из `/settings`; автоторговля выбирает сторону сделки отдельно по `*_ACTION`.
 
 ---
 

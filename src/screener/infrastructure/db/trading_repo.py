@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -10,9 +11,15 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from screener.domain.trade_lifecycle import OpenTrade, PositionCloseReason, TradeClosedEvent
-from screener.domain.trading import TRACKED_STATUSES, ExecutionStatus
+from screener.domain.trading import (
+    TRACKED_STATUSES,
+    ExecutionStatus,
+    entry_status_change_allowed,
+)
 from screener.infrastructure.db.models import TradingExecutionRow, TradingRuntimeStateRow
 from screener.infrastructure.db.session import session_scope
+
+logger = logging.getLogger(__name__)
 
 _CLOSED = ExecutionStatus.CLOSED.value
 _TRACKED = sorted(s.value for s in TRACKED_STATUSES)
@@ -124,6 +131,15 @@ class TradingRepository:
             row = result.scalar_one_or_none()
             if row is None:
                 return
+            new_status = fields.get("status")
+            if new_status is not None and not entry_status_change_allowed(row.status, new_status):
+                logger.warning(
+                    "Keeping execution %s status %s (entry path asked for %s)",
+                    signal_id,
+                    row.status,
+                    new_status,
+                )
+                fields = {k: v for k, v in fields.items() if k != "status"}
             for key, value in fields.items():
                 if hasattr(row, key):
                     setattr(row, key, value)

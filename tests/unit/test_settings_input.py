@@ -72,10 +72,17 @@ def test_parse_percent(text: str, value: float) -> None:
     assert parse_percent(text) == value
 
 
-@pytest.mark.parametrize("text", ["0", "-1", "501", "abc", ""])
+@pytest.mark.parametrize("text", ["0", "-1", "501", "abc", "", "nan", "inf"])
 def test_parse_percent_rejects(text: str) -> None:
     with pytest.raises(SettingInputError):
         parse_percent(text)
+
+
+@pytest.mark.parametrize("kind", ["short", "dump"])
+def test_fall_rules_reject_impossible_percent(kind: str) -> None:
+    with pytest.raises(SettingInputError):
+        apply_setting_text(ScreenerSettings(), kind, "pct", "100")
+    assert apply_setting_text(ScreenerSettings(), "long", "pct", "150").long_threshold_pct == 150
 
 
 def test_apply_setting_text_updates_only_the_chosen_field() -> None:
@@ -95,7 +102,7 @@ def test_prompt_shows_current_values() -> None:
     assert prompt_for("long", "period", settings) == (
         "Введите период лонг в минутах (1–60). Сейчас: 12."
     )
-    assert prompt_for("short", "pct", settings) == "Введите процент шорт. Сейчас: 10."
+    assert prompt_for("short", "pct", settings) == "Введите процент шорт (до 99). Сейчас: 10."
 
 
 def test_rule_interval_accepts_any_whole_minute() -> None:

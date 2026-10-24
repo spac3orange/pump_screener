@@ -150,7 +150,7 @@ class UserContextMiddleware(BaseMiddleware):
                 with contextlib.suppress(Exception):
                     await event.message.answer("Сервис временно недоступен, попробуйте позже.")
             return None
-        if account.status is UserStatus.BANNED and not is_admin:
+        if account.status is UserStatus.BANNED and not is_admin and not payment:
             return None
         data["account"] = account
         result = await handler(event, data)

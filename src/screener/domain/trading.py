@@ -55,3 +55,15 @@ TRACKED_STATUSES = frozenset(
         ExecutionStatus.CLOSING,
     }
 )
+
+# Set by the position lifecycle monitor; the entry path must never overwrite them.
+LIFECYCLE_STATUSES = frozenset(
+    {ExecutionStatus.OPEN, ExecutionStatus.CLOSING, ExecutionStatus.CLOSED}
+)
+
+
+def entry_status_change_allowed(current: str, new: str) -> bool:
+    """Entry path status update: never undo lifecycle states or untrack a filled entry."""
+    if current in LIFECYCLE_STATUSES:
+        return False
+    return not (current in TRACKED_STATUSES and new not in TRACKED_STATUSES)

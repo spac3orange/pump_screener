@@ -30,8 +30,11 @@ DATABASE_URL=postgresql+asyncpg://screener:screener@localhost:55433/screener_reh
   python scripts/rehearse_migration.py --roundtrip
 ```
 
-Downgrade to 006 drops only what 007 added. `AUTO_MIGRATE=false` in production; apply
-`alembic upgrade head` manually after a backup.
+Downgrade to 006 drops only what 007 added, but it **fails once Binance or Bitget
+instruments are stored**: the primary key goes back to `symbol` alone and `BTCUSDT` exists for
+several exchanges. Delete `instruments` rows with `exchange <> 'bybit'` first; non-Bybit rows in
+`signals`/`commercial_signals` then lose their exchange and read as Bybit history.
+`AUTO_MIGRATE=false` in production; apply `alembic upgrade head` manually after a backup.
 
 **Geo check:** Binance `fapi` returns HTTP 451 from banned regions. Before enabling
 `BINANCE_ENABLED=true` on the server, `curl -sI https://fapi.binance.com/fapi/v1/ping`.
@@ -78,7 +81,8 @@ md5 fingerprints after upgrade, after `downgrade 003` and after re-upgrade.
    docker rm -f pumpscreener-rehearsal-db && docker volume rm pump_screener_rehearsal_data
    ```
 3. Set `AUTO_MIGRATE=false` in production `.env` so the app does not migrate on start, then
-   migrate manually with the app stopped:
+   migrate manually with the app stopped. With `false` the app exits at startup if the schema
+   is not at the code's Alembic head, so a forgotten upgrade fails loudly instead of at runtime:
    ```bash
    docker compose stop app
    docker compose run --rm app alembic upgrade head
@@ -88,7 +92,7 @@ md5 fingerprints after upgrade, after `downgrade 003` and after re-upgrade.
 ## 3. Flagged rollout
 
 1. Deploy the new image with `COMMERCIAL_ENABLED=false`. Behaviour is exactly the admin-only bot
-   (non-admins are silently ignored). Check `/healthz`, admin signals, `/trading`.
+   (non-admins get "Доступ запрещён"). Check `/healthz`, admin signals, `/trading`.
 2. Fill `TERMS_URL`, `SUPPORT_CONTACT`, `SUBSCRIPTION_PRICE_STARS` (default 1500),
    `TERMS_VERSION`, then set `COMMERCIAL_ENABLED=true` and restart.
 3. Watch logs and `/admin_stats` (users, active trials/subscriptions, delivery queue, drops).
@@ -103,8 +107,9 @@ Turning the flag off again stops all subscriber traffic; data stays in the comme
   docker compose exec app python scripts/reconcile_stars.py --days 7
   ```
   A `MISSING` line means a payment Telegram accepted but the DB did not apply (Telegram does not
-  redeliver updates). Investigate the charge id, then refund via `/admin_refund <charge_id>` or
-  apply manually.
+  redeliver updates). There is no DB row, so `/admin_refund` cannot find it: refund through the
+  Bot API `refundStarPayment` (user id + charge id from the reconcile output) or apply manually.
+  `/admin_refund` likewise only finds **applied** payments, not anomaly rows.
 - **Refund**: `/admin_refund <telegram_payment_charge_id>` (admin only). Access ends immediately,
   auto-renew is cancelled at Telegram.
 - Payment anomalies (wrong amount, duplicate subscription, unknown payload) are alerted to the
@@ -113,7 +118,8 @@ Turning the flag off again stops all subscriber traffic; data stays in the comme
 ## 5. Rollback
 
 1. Set `COMMERCIAL_ENABLED=false` and restart — enough for any runtime problem.
-2. Previous image: redeploy tag `v3.1`.
+2. Previous code: compose builds from the working tree (`build: .`), so check out the previous
+   release commit and run `docker compose up -d --build app`.
 3. Schema: `alembic downgrade 006` drops only the 007 exchange columns/`app_settings`.
    `alembic downgrade 005` drops only the commercial tables (users, configs, trials,
    subscriptions, payments, commercial signals/events). Existing tables are not modified. Commercial

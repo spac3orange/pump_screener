@@ -100,7 +100,7 @@ class BitgetTickerProcessor:
             state = self._states.get(symbol)
             if state is None:
                 state = self._states[symbol] = _State()
-            if state.seeded and ts_ms <= state.last_ts_ms:
+            if state.seeded and ts_ms < state.last_ts_ms:
                 stats.out_of_order_total += 1
                 continue
             turnover = _float(item.get("turnover24h"))
