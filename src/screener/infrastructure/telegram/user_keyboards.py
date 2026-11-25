@@ -16,7 +16,7 @@ USER_ACTION = "ua"
 MENU_ACCOUNT = "👤 Аккаунт"
 MENU_SETTINGS = "⚙️ Настройки"
 MENU_SUBSCRIPTION = "⭐ Подписка"
-MENU_HELP = "❓ Помощь"
+MENU_HELP = "❓ Помощь"  # legacy label; still accepted to clear old reply keyboards
 MENU_BUTTONS = (MENU_ACCOUNT, MENU_SETTINGS, MENU_SUBSCRIPTION, MENU_HELP)
 
 

@@ -45,7 +45,6 @@ USER_COMMANDS = [
     BotCommand(command="account", description="Мой доступ и статус"),
     BotCommand(command="settings", description="Мои правила сигналов"),
     BotCommand(command="subscription", description="Подписка и оплата"),
-    BotCommand(command="help", description="Справка"),
     BotCommand(command="support", description="Поддержка"),
     BotCommand(command="paysupport", description="Вопросы по оплате"),
     BotCommand(command="terms", description="Условия"),
@@ -56,10 +55,8 @@ ADMIN_COMMANDS = [
     BotCommand(command="status", description="Состояние"),
     BotCommand(command="settings", description="Настройки активного профиля"),
     BotCommand(command="profiles", description="Профили мониторинга"),
-    BotCommand(command="trading", description="Автоторговля Bybit"),
     BotCommand(command="signals", description="Последние сигналы"),
     BotCommand(command="stats", description="Статистика"),
-    BotCommand(command="help", description="Справка"),
 ]
 
 COMMERCIAL_ADMIN_COMMANDS = [

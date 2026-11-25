@@ -163,7 +163,7 @@ async def test_admin_alerted_once_per_new_user(env) -> None:
     await env.feed(_msg(ADMIN, "/start"))
     await env.feed(_msg(ALICE, "/start"))
     await env.feed(_msg(ALICE, "/start"))
-    await env.feed(_msg(BOB, "/help"))
+    await env.feed(_msg(BOB, "/start"))
     alerts = [t for t in env.session.texts(ADMIN) if "Новый пользователь" in t]
     assert len(alerts) == 2
     assert f"tg://user?id={ALICE}" in alerts[0] and f"<code>{BOB}</code>" in alerts[1]

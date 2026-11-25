@@ -57,7 +57,7 @@ src/screener/
   infrastructure/
     bybit/                # REST, WS, mapping
     db/                   # models, session, repositories
-    telegram/             # bot, handlers, formatter, help, settings UI
+    telegram/             # bot, handlers, formatter, settings UI
     http/app.py           # /healthz /readyz /metrics
 alembic/versions/
   001_initial_schema.py
@@ -264,17 +264,13 @@ ByBit – 15M – ABC
   «Создать из текущих», «Настройки». Если автоторговля ON, активация требует подтверждения
   (торговля при этом не выключается).
 
-### 7.3 `/help`
-
-Динамическая справка из `help_text.build_help_messages(settings)` — 3 HTML-сообщения с текущими порогами/интервалами/оборотом/cooldown. Не хардкодит дефолты. Тесты: `tests/unit/test_help_text.py`.
-
-### 7.4 Доступ
+### 7.3 Доступ
 
 `AdminAccessMiddleware` — только `ADMIN_ID` (comma-separated). Остальные отклоняются.
-При `COMMERCIAL_ENABLED=true` вместо него `UserContextMiddleware` (см. §7.5): admin-роутер
+При `COMMERCIAL_ENABLED=true` вместо него `UserContextMiddleware` (см. §7.4): admin-роутер
 закрыт `AdminFilter`, остальные пользователи попадают только в роутеры подписчика и оплаты.
 
-### 7.5 Коммерческий режим (PumpScreener Pro)
+### 7.4 Коммерческий режим (PumpScreener Pro)
 
 Флаг `COMMERCIAL_ENABLED` (по умолчанию `false` — бот ровно как раньше).
 
@@ -431,7 +427,6 @@ Ready loop обновляет `metrics.ready` раз в секунду.
 | Команда | Содержание |
 |---------|------------|
 | `/start` | краткое описание |
-| `/help` | 3 сообщения: правила, чтение алерта, ограничения |
 | `/status` | Monitoring profile, ready, instruments, WS, msg/s, live price/s, drops, lost, reconnects, gaps, p95 |
 | `/settings` | правила активного профиля + клавиатура |
 | `/profiles` | мониторинг-профили: активация, создание, копия, переименование, удаление |
@@ -441,8 +436,8 @@ Ready loop обновляет `metrics.ready` раз в секунду.
 | `/admin_refund <charge_id>` | (commercial) возврат Stars + отзыв доступа |
 
 Подписчики (только при `COMMERCIAL_ENABLED=true`): `/start`, `/account`, `/settings` (свои правила),
-`/subscription` (оплата, отмена/возобновление автопродления), `/terms`, `/support`, `/paysupport`,
-`/help`. Неизвестные и admin-команды → «Неизвестная команда».
+`/subscription` (оплата, отмена/возобновление автопродления), `/terms`, `/support`, `/paysupport`.
+Неизвестные и admin-команды → «Неизвестная команда».
 
 ---
 
@@ -478,7 +473,6 @@ docker logs pumpscreener-app-1
 - snapshot/enrichment не вызывают evaluate;
 - notification при «зависшей» DB всё равно уходит;
 - dynamic WS subscribe + start-after-update_symbols;
-- `/help` динамические settings / disabled rule / HTML escape / длина < 4096;
 - golden-фикстура сигналов (`tests/unit/test_signal_golden.py`, в т.ч. короткий спайк с пересечением порога внутри секунды);
 - профили: CRUD, миграция before == after, атомарная активация, no-hybrid при конкурентной смене,
   provenance сигнала (`tests/unit/test_profiles.py`);
@@ -515,13 +509,12 @@ docker logs pumpscreener-app-1
 | Задача | Где |
 |--------|-----|
 | Новое ценовое правило | `domain/rules.py` + `signal_engine.py` + settings/Telegram UI |
-| Изменить формат алерта | `telegram/formatter.py` (+ help_text sample) |
+| Изменить формат алерта | `telegram/formatter.py` |
 | Изменить anti-spam | `dedup.py` + ScreenerSettings fields |
 | Universe filter | `bybit/mapping.py` |
 | История / gaps | `price_history.py` + worker warmup/backfill |
 | WS поведение | `bybit/ws.py` |
 | Независимая доставка | `persistence_service.py` / `notification_service.py` |
-| Текст `/help` | `telegram/help_text.py` |
 | Миграции схемы | `alembic/versions/` |
 | Причина закрытия сделки | `application/trading/close_classifier.py` |
 | Формат сообщения о закрытии | `telegram/trade_lifecycle_format.py` |

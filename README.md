@@ -71,10 +71,10 @@ pytest -q
 
 ## Telegram commands
 
-Admin: `/start` `/status` `/settings` `/profiles` `/signals` `/stats` `/trading` `/help`;
+Admin: `/start` `/status` `/settings` `/profiles` `/signals` `/stats`;
 commercial mode adds `/admin_stats` `/admin_users` `/admin_refund <charge_id>` `/account`.
 
-Subscribers (commercial mode): `/start` `/account` `/settings` `/subscription` `/help`
+Subscribers (commercial mode): `/start` `/account` `/settings` `/subscription`
 `/support` `/paysupport` `/terms`.
 
 Detection rules live in named, versioned **monitoring profiles** stored in PostgreSQL

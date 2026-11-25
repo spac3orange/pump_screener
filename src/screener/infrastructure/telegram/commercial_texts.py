@@ -181,28 +181,6 @@ def paysupport_text(settings: CommercialSettings) -> str:
     )
 
 
-def help_text(settings: CommercialSettings) -> str:
-    return (
-        f"<b>{PRODUCT} — справка</b>\n\n"
-        "Бот следит за USDT Perpetual на Bybit и присылает сигнал, когда цена "
-        "меняется на заданный процент за заданный период:\n"
-        "🟢 <b>Лонг</b> — рост на X% за N минут\n"
-        "🔻 <b>Дамп</b> — сильное падение\n"
-        "Монеты с оборотом за 24ч ниже порога пропускаются.\n\n"
-        "<b>Команды</b>\n"
-        "/start — начало\n"
-        "/account — мой доступ и статус\n"
-        "/settings — мои правила сигналов\n"
-        "/subscription — подписка и оплата\n"
-        "/terms — условия\n"
-        "/support — поддержка\n"
-        "/paysupport — вопросы по оплате\n"
-        "/help — эта справка\n\n"
-        f"Пробный период: {settings.trial_duration_hours} ч, один раз. "
-        f"Подписка: {settings.subscription_price_stars} ⭐ / 30 дней."
-    )
-
-
 def trial_started_text(user: UserAccount) -> str:
     return (
         "🎁 <b>Пробный период начался</b>\n"
@@ -288,7 +266,7 @@ def new_user_admin_text(user: TgUser) -> str:
     return "\n".join(lines)
 
 
-UNKNOWN_COMMAND_TEXT = "Неизвестная команда. Список команд: /help"
+UNKNOWN_COMMAND_TEXT = "Неизвестная команда. Список команд: /start"
 MENU_REMOVED_TEXT = "Кнопки внизу убраны. Все команды — в меню слева от поля ввода."
 RATE_LIMITED_TEXT = "Слишком много запросов, подождите немного."
 TERMS_REQUIRED_TEXT = "Сначала примите условия использования: /terms"

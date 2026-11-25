@@ -160,11 +160,6 @@ async def u_paysupport(message: Message, commercial: CommercialRuntime) -> None:
     await message.answer(texts.paysupport_text(commercial.settings))
 
 
-@user_router.message(Command("help"))
-async def u_help(message: Message, commercial: CommercialRuntime) -> None:
-    await message.answer(texts.help_text(commercial.settings))
-
-
 # --- account / subscription callbacks ------------------------------------------
 
 
@@ -389,7 +384,7 @@ async def u_menu_button(
     elif message.text == MENU_SETTINGS:
         await u_settings(message, account, commercial, state)
     elif message.text == MENU_HELP:
-        await u_help(message, commercial)
+        return
     else:
         await u_subscription(message, account, commercial)
 

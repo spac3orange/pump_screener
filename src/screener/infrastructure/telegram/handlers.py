@@ -18,7 +18,6 @@ from screener.config import ScreenerSettings
 from screener.domain.exchanges import BINANCE, BITGET, BYBIT, exchanges_label, toggle_exchange
 from screener.domain.profiles import ProfileError, ProfileNameTaken, normalize_profile_name
 from screener.infrastructure.telegram.commercial_texts import started_users_messages
-from screener.infrastructure.telegram.help_text import build_help_messages
 from screener.infrastructure.telegram.keyboards import (
     settings_keyboard,
     symbol_limits_keyboard,
@@ -224,45 +223,24 @@ def _running_exchanges(state: AppState) -> str:
     return exchanges_label(feeds) if feeds else "Bybit"
 
 
-def _instruments_total(snap: dict) -> int:
-    """Bybit counter lives at the top level; other exchanges under ``feeds``."""
-    total = int(snap.get("instruments_active") or 0)
-    for code, data in (snap.get("feeds") or {}).items():
-        if code != BYBIT:
-            total += int(data.get("instruments_active") or 0)
-    return total
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: AppState) -> None:
     await message.answer(
         "<b>Bybit Market Screener</b>\n"
         f"Мониторинг crypto USDT Linear Perpetual на {_running_exchanges(state)}: "
-        "лонг, шорт и дамп.\n\n"
+        "лонг и дамп.\n\n"
         "Команды:\n"
         "/status — состояние\n"
         "/settings — настройки активного профиля\n"
         "/profiles — профили мониторинга\n"
-        "/trading — автоторговля Bybit\n"
         "/signals — последние сигналы\n"
-        "/stats — статистика\n"
-        "/help — справка"
+        "/stats — статистика"
     )
 
 
 @router.message(Command("trading"))
 async def cmd_trading(message: Message, state: AppState) -> None:
     await _render_trading(message, state, force=True)
-
-
-@router.message(Command("help"))
-async def cmd_help(message: Message, state: AppState) -> None:
-    parts = build_help_messages(
-        state.signal_engine.settings,
-        instruments=_instruments_total(metrics.snapshot()),
-    )
-    for part in parts:
-        await message.answer(part)
 
 
 def _feeds_status(snap: dict) -> str:
