@@ -279,24 +279,6 @@ class TradingService:
             status="on" if self._enabled else "off",
             reason=self.disabled_reason or None,
         )
-        await self._notify_text(self._startup_notice(persisted))
-
-    def _startup_notice(self, persisted: bool | None) -> str:
-        lines = [
-            "🔄 Торговый модуль запущен",
-            f"Mode: {self.settings.bybit_trading_mode.upper()}",
-            f"Ready: {'yes' if self._ready else f'no ({html.escape(self._ready_reason)})'}",
-            f"Trading: {'ON' if self._enabled else 'OFF'}",
-        ]
-        if not self._enabled:
-            lines.append(f"Причина: {self.describe_disabled_reason()}")
-            if persisted and not self.settings.trading_auto_resume:
-                lines.append(
-                    "⚠️ До перезапуска торговля была включена. "
-                    "Включите снова через /trading или задайте TRADING_AUTO_RESUME=true."
-                )
-        lines.append(f"Instance: {self._instance}")
-        return "\n".join(lines)
 
     async def stop(self) -> None:
         await cancel_tasks(self._tasks)

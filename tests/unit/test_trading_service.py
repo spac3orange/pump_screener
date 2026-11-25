@@ -477,7 +477,7 @@ async def test_restart_without_auto_resume_reports_reason() -> None:
     try:
         assert svc.enabled is False
         assert svc.disabled_reason == "restart_no_auto_resume"
-        assert any("Торговый модуль запущен" in n and "TRADING_AUTO_RESUME" in n for n in notes)
+        assert notes == []
         await svc._handle(_signal(SignalType.DUMP))
         assert not any("Сделка пропущена" in n for n in notes)
         assert gw.place_calls == 0
