@@ -93,13 +93,13 @@ class UserDetectionConfig(BaseModel):
     """
 
     enable_long: bool = True
-    long_threshold_pct: float = Field(default=40.0, gt=0, le=500)
+    long_threshold_pct: float = Field(default=40.0, gt=0)
     long_interval_sec: int = 720
     enable_short: bool = False
-    short_threshold_pct: float = Field(default=10.0, gt=0, le=500)
+    short_threshold_pct: float = Field(default=10.0, gt=0)
     short_interval_sec: int = 1800
     enable_dump: bool = True
-    dump_threshold_pct: float = Field(default=40.0, gt=0, le=500)
+    dump_threshold_pct: float = Field(default=40.0, gt=0)
     dump_interval_sec: int = 900
     min_turnover_24h_usdt: float = Field(default=100_000.0, ge=0, le=1e12)
 
@@ -107,7 +107,10 @@ class UserDetectionConfig(BaseModel):
     @classmethod
     def _validate_rule_interval(cls, value: int) -> int:
         if value < 60 or value > MAX_RULE_INTERVAL_SEC or value % 60 != 0:
-            raise ValueError("interval must be a whole number of minutes from 1 to 60")
+            raise ValueError(
+                "interval must be a whole number of minutes from 1 to "
+                f"{MAX_RULE_INTERVAL_SEC // 60}"
+            )
         return value
 
     @classmethod

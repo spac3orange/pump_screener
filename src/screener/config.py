@@ -7,7 +7,9 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 TRADFI_SYMBOL_TYPES = frozenset({"stock", "ETF", "commodity", "forex"})
-MAX_RULE_INTERVAL_SEC = 3600
+# Hard ceiling for rule windows (24h). Longer values need more RAM for the 1 Hz ring
+# and cannot be fully seeded by REST warmup (Bybit 1m kline limit is 1000 bars).
+MAX_RULE_INTERVAL_SEC = 86_400
 # Bump when ScreenerSettings fields change; stored profile versions carry it.
 MONITORING_CONFIG_SCHEMA_VERSION = 2
 
@@ -54,7 +56,10 @@ class ScreenerSettings(BaseModel):
     @classmethod
     def _validate_rule_interval(cls, value: int) -> int:
         if value < 60 or value > MAX_RULE_INTERVAL_SEC or value % 60 != 0:
-            raise ValueError("interval must be a whole number of minutes from 1 to 60")
+            raise ValueError(
+                "interval must be a whole number of minutes from 1 to "
+                f"{MAX_RULE_INTERVAL_SEC // 60}"
+            )
         return value
 
     @field_validator("exclude_symbols", mode="before")

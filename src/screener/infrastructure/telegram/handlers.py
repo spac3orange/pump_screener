@@ -35,14 +35,18 @@ from screener.infrastructure.telegram.profiles_view import (
     usd_short,
 )
 from screener.infrastructure.telegram.settings_input import (
+    ANTISPAM_FIELDS,
     DAILY_LIMIT_HINT,
     FIELDS,
     RULES,
     TURNOVER_HINT,
     SettingInputError,
+    antispam_help_text,
+    apply_antispam_text,
     apply_daily_limit,
     apply_setting_text,
     parse_turnover,
+    prompt_antispam,
     prompt_for,
     remove_daily_limit,
     toggle_rule,
@@ -188,6 +192,11 @@ def _settings_text(settings: ScreenerSettings, profile_name: str | None = None) 
             signed=True,
         ),
         f"💧 Мин. оборот 24ч: {usd_short(settings.min_turnover_24h_usdt)}",
+        (
+            f"Anti-spam: cooldown {settings.cooldown_sec}s · "
+            f"escalate +{settings.escalate_step_pct:g}% · "
+            f"reset {settings.reset_ratio:g} / {settings.reset_hold_sec}s"
+        ),
     ]
     if settings.symbol_daily_limits:
         caps = ", ".join(
@@ -238,8 +247,14 @@ async def cmd_start(message: Message, state: AppState) -> None:
         "/settings — настройки активного профиля\n"
         "/profiles — профили мониторинга\n"
         "/signals — последние сигналы\n"
-        "/stats — статистика"
+        "/stats — статистика\n"
+        "/antispam — подсказка по anti-spam"
     )
+
+
+@router.message(Command("antispam"))
+async def cmd_antispam(message: Message, state: AppState) -> None:
+    await message.answer(antispam_help_text(state.signal_engine.settings))
 
 
 @router.message(Command("trading"))
@@ -523,6 +538,13 @@ async def on_toggle_exchange(query: CallbackQuery, state: AppState) -> None:
 DAILY_LIMIT_EDIT = "daily_limit"
 
 
+@router.callback_query(F.data == "antispam:help")
+async def on_antispam_help(query: CallbackQuery, state: AppState) -> None:
+    if query.message is not None:
+        await query.message.answer(antispam_help_text(state.signal_engine.settings))
+    await query.answer()
+
+
 def _limits_screen(state: AppState) -> tuple[str, InlineKeyboardMarkup]:
     settings = state.signal_engine.settings
     if settings.symbol_daily_limits:
@@ -610,6 +632,15 @@ async def on_set_field(query: CallbackQuery, state: AppState) -> None:
             await query.message.answer(f"{TURNOVER_HINT}\nСейчас: {current}.")
         await query.answer()
         return
+    if len(parts) == 3 and parts[1] == "antispam" and parts[2] in ANTISPAM_FIELDS:
+        field_name = parts[2]
+        state.begin_setting_edit(query.from_user.id, "antispam", field_name)
+        if query.message is not None:
+            await query.message.answer(
+                prompt_antispam(field_name, state.signal_engine.settings)
+            )
+        await query.answer()
+        return
     if len(parts) != 3 or parts[1] not in RULES or parts[2] not in FIELDS:
         await query.answer("Неизвестная настройка", show_alert=True)
         return
@@ -662,6 +693,24 @@ async def on_setting_value(message: Message, state: AppState) -> None:
         updated = state.signal_engine.settings.model_copy(
             update={"min_turnover_24h_usdt": value}
         )
+        state.clear_pending_edit(message.from_user.id)
+        try:
+            await state.apply_settings(updated, chat_id=message.from_user.id)
+        except ProfileError as exc:
+            await message.answer(html.escape(str(exc)))
+            return
+        text, markup = _settings_screen(state)
+        await message.answer(text, reply_markup=markup)
+        return
+    if kind == "antispam":
+        try:
+            updated = apply_antispam_text(
+                state.signal_engine.settings, field_name, message.text
+            )
+        except SettingInputError as exc:
+            hint = prompt_antispam(field_name, state.signal_engine.settings)
+            await message.answer(f"{html.escape(str(exc))}\n{hint}")
+            return
         state.clear_pending_edit(message.from_user.id)
         try:
             await state.apply_settings(updated, chat_id=message.from_user.id)

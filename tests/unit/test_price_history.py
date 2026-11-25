@@ -123,3 +123,12 @@ def test_backfill_source_enum_round_trip() -> None:
     h.record("EUSDT", ts_ms=_sec(60), price=1.0)
     got = h.lookup("EUSDT", now_ms=_sec(60), interval_sec=60)
     assert got is not None and got.quality is HistoryQuality.MIXED
+
+
+def test_ensure_capacity_grows_and_requests_warmup() -> None:
+    h = PriceHistoryManager(capacity_sec=120)
+    h.record("FUSDT", ts_ms=_sec(0), price=1.0)
+    h.ensure_capacity(7200)
+    assert h.capacity_sec == 7200
+    assert h.take_needs_warmup() == ["FUSDT"]
+    assert h.lookup("FUSDT", now_ms=_sec(60), interval_sec=60) is None

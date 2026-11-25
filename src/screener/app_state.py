@@ -16,6 +16,7 @@ from screener.application.signal_engine import SignalEngine
 from screener.application.trading.lifecycle import PositionLifecycleService
 from screener.application.trading.service import TradingService
 from screener.application.metrics import metrics
+from screener.application.price_history import history_capacity_for
 from screener.application.symbol_daily_limiter import SymbolDailyLimiter
 from screener.config import ScreenerSettings, SystemSettings, TradingSettings
 from screener.domain.exchanges import BYBIT
@@ -155,6 +156,10 @@ class AppState:
         engines = [self.signal_engine]
         correlators = [self.correlator]
         registries = [self.registry]
+        histories = []
+        own_history = getattr(self, "history", None)
+        if own_history is not None:
+            histories.append(own_history)
         for feed in getattr(self, "feeds", {}).values():
             if feed.signal_engine is not None and feed.signal_engine not in engines:
                 engines.append(feed.signal_engine)
@@ -162,6 +167,20 @@ class AppState:
                 correlators.append(feed.correlator)
             if feed.registry is not None and feed.registry not in registries:
                 registries.append(feed.registry)
+            feed_history = getattr(feed, "history", None)
+            if feed_history is not None and feed_history not in histories:
+                histories.append(feed_history)
+        needed = history_capacity_for(
+            max(
+                settings.long_interval_sec,
+                settings.short_interval_sec,
+                settings.dump_interval_sec,
+            )
+        )
+        for history in histories:
+            ensure = getattr(history, "ensure_capacity", None)
+            if callable(ensure):
+                ensure(needed)
         for engine in engines:
             engine.update_settings(settings, context=active.context, reset_dedup=reset_dedup)
         for correlator in correlators:

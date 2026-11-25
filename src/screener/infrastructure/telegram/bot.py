@@ -57,6 +57,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="profiles", description="Профили мониторинга"),
     BotCommand(command="signals", description="Последние сигналы"),
     BotCommand(command="stats", description="Статистика"),
+    BotCommand(command="antispam", description="Подсказка по anti-spam"),
 ]
 
 COMMERCIAL_ADMIN_COMMANDS = [

@@ -5,7 +5,6 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from screener.application.metrics import metrics
-from screener.config import MAX_RULE_INTERVAL_SEC
 from screener.domain.enums import HistoryQuality, HistorySource
 from screener.domain.rules import window_tolerance_sec
 
@@ -14,8 +13,13 @@ _KLINE = 1
 _TICKER = 2
 _SRC_CODE = {HistorySource.KLINE: _KLINE, HistorySource.TICKER: _TICKER}
 
-# Longest window + its lookup tolerance + margin.
-DEFAULT_CAPACITY_SEC = MAX_RULE_INTERVAL_SEC + window_tolerance_sec(MAX_RULE_INTERVAL_SEC) + 60
+def history_capacity_for(max_interval_sec: int) -> int:
+    """Ring length needed to look up a window of ``max_interval_sec``."""
+    return max_interval_sec + window_tolerance_sec(max_interval_sec) + 60
+
+
+# Boot capacity matches the old 60m rule ceiling; grows via ensure_capacity.
+DEFAULT_CAPACITY_SEC = history_capacity_for(3_600)
 
 
 @dataclass(slots=True, frozen=True)
@@ -67,6 +71,15 @@ class PriceHistoryManager:
     @property
     def capacity_sec(self) -> int:
         return self._cap
+
+    def ensure_capacity(self, capacity_sec: int) -> None:
+        """Grow the ring if rules need a longer window; drops in-memory history."""
+        if capacity_sec <= self._cap:
+            return
+        symbols = list(self._rings)
+        self._cap = capacity_sec
+        self._rings.clear()
+        self._needs_warmup.update(symbols)
 
     def take_needs_warmup(self) -> list[str]:
         """Symbols whose history was dropped after an outage longer than the capacity."""

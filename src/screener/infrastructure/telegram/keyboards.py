@@ -86,6 +86,30 @@ def settings_keyboard(
         ],
         [
             InlineKeyboardButton(
+                text=f"Cooldown {settings.cooldown_sec}s", callback_data="set:antispam:cooldown"
+            ),
+            InlineKeyboardButton(
+                text=f"Escalate +{settings.escalate_step_pct:g}%",
+                callback_data="set:antispam:escalate",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Reset {settings.reset_ratio:g}",
+                callback_data="set:antispam:reset_ratio",
+            ),
+            InlineKeyboardButton(
+                text=f"Reset hold {settings.reset_hold_sec}s",
+                callback_data="set:antispam:reset_hold",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="❓ Anti-spam справка", callback_data="antispam:help"
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text=f"{EXCHANGES[code].label} {'ON' if code in chosen else 'OFF'}",
                 callback_data=f"ex:{code}",
             )

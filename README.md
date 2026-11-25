@@ -71,7 +71,7 @@ pytest -q
 
 ## Telegram commands
 
-Admin: `/start` `/status` `/settings` `/profiles` `/signals` `/stats`;
+Admin: `/start` `/status` `/settings` `/profiles` `/signals` `/stats` `/antispam`;
 commercial mode adds `/admin_stats` `/admin_users` `/admin_refund <charge_id>` `/account`.
 
 Subscribers (commercial mode): `/start` `/account` `/settings` `/subscription`

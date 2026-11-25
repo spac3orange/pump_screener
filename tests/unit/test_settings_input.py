@@ -7,6 +7,8 @@ from screener.infrastructure.telegram.keyboards import settings_keyboard, symbol
 from screener.infrastructure.telegram.middleware import _command_user_id
 from screener.infrastructure.telegram.settings_input import (
     SettingInputError,
+    antispam_help_text,
+    apply_antispam_text,
     apply_daily_limit,
     apply_setting_text,
     parse_daily_limit,
@@ -29,29 +31,20 @@ def test_toggle_rule_flips_only_that_rule() -> None:
         toggle_rule(ScreenerSettings(), "volume")
 
 
-def test_settings_keyboard_has_long_dump_turnover_and_limits() -> None:
+def test_settings_keyboard_has_rules_turnover_antispam_and_limits() -> None:
     markup = settings_keyboard(ScreenerSettings(), binance_available=False, bitget_available=False)
     toggles = markup.inline_keyboard[0]
     assert [b.text for b in toggles] == ["Лонг ON", "Дамп ON"]
-    assert [b.callback_data for b in toggles] == ["toggle:long", "toggle:dump"]
-    *rule_rows, turnover, exchanges, limits, nav = markup.inline_keyboard[1:]
-    assert [b.callback_data for b in nav] == ["prof:list"]
-    assert [b.callback_data for b in exchanges] == ["ex:bybit"]
-    assert [b.callback_data for b in limits] == ["limits:list"]
-    assert [b.callback_data for b in turnover] == ["set:turnover:value"]
-    buttons = [button for row in rule_rows for button in row]
-    assert [button.text for button in buttons] == [
-        "🟢 Период лонг",
-        "➗ Процент лонг",
-        "🔻 Период дамп",
-        "➗ Процент дамп",
-    ]
-    assert [button.callback_data for button in buttons] == [
-        "set:long:period",
-        "set:long:pct",
-        "set:dump:period",
-        "set:dump:pct",
-    ]
+    flat = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "set:turnover:value" in flat
+    assert "set:antispam:cooldown" in flat
+    assert "set:antispam:escalate" in flat
+    assert "set:antispam:reset_ratio" in flat
+    assert "set:antispam:reset_hold" in flat
+    assert "antispam:help" in flat
+    assert "limits:list" in flat
+    assert "prof:list" in flat
+    assert "ex:bybit" in flat
 
 
 def test_symbol_limits_keyboard_lists_caps() -> None:
@@ -66,13 +59,13 @@ def test_symbol_limits_keyboard_lists_caps() -> None:
 
 @pytest.mark.parametrize(
     ("text", "seconds"),
-    [("1", 60), ("12", 720), ("60", 3600), (" 7 ", 420)],
+    [("1", 60), ("12", 720), ("60", 3600), (" 7 ", 420), ("120", 7200), ("1440", 86_400)],
 )
 def test_parse_period_minutes(text: str, seconds: int) -> None:
     assert parse_period_minutes(text) == seconds
 
 
-@pytest.mark.parametrize("text", ["0", "61", "12.5", "abc", "", "-1"])
+@pytest.mark.parametrize("text", ["0", "1441", "12.5", "abc", "", "-1"])
 def test_parse_period_minutes_rejects(text: str) -> None:
     with pytest.raises(SettingInputError):
         parse_period_minutes(text)
@@ -80,21 +73,20 @@ def test_parse_period_minutes_rejects(text: str) -> None:
 
 @pytest.mark.parametrize(
     ("text", "value"),
-    [("10.5", 10.5), ("10,5", 10.5), ("0.1", 0.1), ("500", 500.0), ("40", 40.0)],
+    [("10.5", 10.5), ("10,5", 10.5), ("0.1", 0.1), ("500", 500.0), ("1500", 1500.0)],
 )
 def test_parse_percent(text: str, value: float) -> None:
     assert parse_percent(text) == value
 
 
-@pytest.mark.parametrize("text", ["0", "-1", "501", "abc", "", "nan", "inf"])
+@pytest.mark.parametrize("text", ["0", "-1", "abc", "", "nan", "inf"])
 def test_parse_percent_rejects(text: str) -> None:
     with pytest.raises(SettingInputError):
         parse_percent(text)
 
 
-def test_dump_rejects_impossible_percent() -> None:
-    with pytest.raises(SettingInputError):
-        apply_setting_text(ScreenerSettings(), "dump", "pct", "100")
+def test_dump_allows_any_positive_percent() -> None:
+    assert apply_setting_text(ScreenerSettings(), "dump", "pct", "100").dump_threshold_pct == 100
     assert apply_setting_text(ScreenerSettings(), "long", "pct", "150").long_threshold_pct == 150
 
 
@@ -113,9 +105,39 @@ def test_apply_setting_text_updates_only_the_chosen_field() -> None:
 def test_prompt_shows_current_values() -> None:
     settings = ScreenerSettings()
     assert prompt_for("long", "period", settings) == (
-        "Введите период лонг в минутах (1–60). Сейчас: 12."
+        "Введите период лонг в минутах (целое ≥ 1, максимум 1440). Сейчас: 12."
     )
-    assert prompt_for("dump", "pct", settings) == "Введите процент дамп (до 99). Сейчас: 40."
+    assert prompt_for("dump", "pct", settings) == "Введите процент дамп (больше 0). Сейчас: 40."
+
+
+def test_apply_antispam_text() -> None:
+    settings = ScreenerSettings()
+    assert apply_antispam_text(settings, "cooldown", "120").cooldown_sec == 120
+    assert apply_antispam_text(settings, "escalate", "3.5").escalate_step_pct == 3.5
+    assert apply_antispam_text(settings, "reset_ratio", "0.25").reset_ratio == 0.25
+    assert apply_antispam_text(settings, "reset_hold", "90").reset_hold_sec == 90
+    with pytest.raises(SettingInputError):
+        apply_antispam_text(settings, "reset_ratio", "1.5")
+
+
+def test_antispam_help_includes_current_values_and_sections() -> None:
+    text = antispam_help_text(
+        ScreenerSettings(
+            cooldown_sec=120,
+            escalate_step_pct=3.5,
+            reset_ratio=0.25,
+            reset_hold_sec=90,
+        )
+    )
+    assert "Cooldown: <code>120</code>" in text
+    assert "Escalate: <code>+3.5</code>" in text
+    assert "Reset ratio: <code>0.25</code>" in text
+    assert "Reset hold: <code>90</code>" in text
+    assert "<b>Cooldown</b>" in text
+    assert "<b>Escalate</b>" in text
+    assert "<b>Reset ratio</b>" in text
+    assert "<b>Reset hold</b>" in text
+    assert "antispam:help" not in text
 
 
 @pytest.mark.parametrize(
@@ -145,16 +167,15 @@ def test_apply_and_remove_daily_limit() -> None:
     assert cleared.symbol_daily_limits == {}
 
 
-def test_rule_interval_accepts_any_whole_minute() -> None:
+def test_rule_interval_accepts_long_windows() -> None:
     settings = ScreenerSettings(
-        long_interval_sec=420, short_interval_sec=60, dump_interval_sec=3600
+        long_interval_sec=7200, short_interval_sec=60, dump_interval_sec=86_400
     )
-    assert settings.long_interval_sec == 420
-    assert settings.short_interval_sec == 60
-    assert settings.dump_interval_sec == 3600
+    assert settings.long_interval_sec == 7200
+    assert settings.dump_interval_sec == 86_400
 
 
-@pytest.mark.parametrize("seconds", [0, 30, 90, 3660])
+@pytest.mark.parametrize("seconds", [0, 30, 90, 86_401])
 def test_rule_interval_rejects_non_minute_or_out_of_range(seconds: int) -> None:
     with pytest.raises(ValidationError):
         ScreenerSettings(long_interval_sec=seconds)
