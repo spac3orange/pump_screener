@@ -81,6 +81,11 @@ def settings_keyboard(
         ],
         [
             InlineKeyboardButton(
+                text="💧 Мин. оборот 24ч", callback_data="set:turnover:value"
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text=f"{EXCHANGES[code].label} {'ON' if code in chosen else 'OFF'}",
                 callback_data=f"ex:{code}",
             )

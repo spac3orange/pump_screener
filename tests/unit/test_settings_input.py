@@ -12,6 +12,7 @@ from screener.infrastructure.telegram.settings_input import (
     parse_daily_limit,
     parse_percent,
     parse_period_minutes,
+    parse_turnover,
     prompt_for,
     remove_daily_limit,
     toggle_rule,
@@ -28,15 +29,16 @@ def test_toggle_rule_flips_only_that_rule() -> None:
         toggle_rule(ScreenerSettings(), "volume")
 
 
-def test_settings_keyboard_has_long_dump_and_limits() -> None:
+def test_settings_keyboard_has_long_dump_turnover_and_limits() -> None:
     markup = settings_keyboard(ScreenerSettings(), binance_available=False, bitget_available=False)
     toggles = markup.inline_keyboard[0]
     assert [b.text for b in toggles] == ["Лонг ON", "Дамп ON"]
     assert [b.callback_data for b in toggles] == ["toggle:long", "toggle:dump"]
-    *rule_rows, exchanges, limits, nav = markup.inline_keyboard[1:]
+    *rule_rows, turnover, exchanges, limits, nav = markup.inline_keyboard[1:]
     assert [b.callback_data for b in nav] == ["prof:list"]
     assert [b.callback_data for b in exchanges] == ["ex:bybit"]
     assert [b.callback_data for b in limits] == ["limits:list"]
+    assert [b.callback_data for b in turnover] == ["set:turnover:value"]
     buttons = [button for row in rule_rows for button in row]
     assert [button.text for button in buttons] == [
         "🟢 Период лонг",
@@ -114,6 +116,14 @@ def test_prompt_shows_current_values() -> None:
         "Введите период лонг в минутах (1–60). Сейчас: 12."
     )
     assert prompt_for("dump", "pct", settings) == "Введите процент дамп (до 99). Сейчас: 40."
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [("500000", 500_000.0), ("500k", 500_000.0), ("1m", 1_000_000.0), ("0", 0.0)],
+)
+def test_parse_turnover(text: str, value: float) -> None:
+    assert parse_turnover(text) == value
 
 
 def test_normalize_symbol_and_daily_limit_parse() -> None:

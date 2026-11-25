@@ -32,14 +32,17 @@ from screener.infrastructure.telegram.profiles_view import (
     profile_card_text,
     profiles_list_keyboard,
     profiles_list_text,
+    usd_short,
 )
 from screener.infrastructure.telegram.settings_input import (
     DAILY_LIMIT_HINT,
     FIELDS,
     RULES,
+    TURNOVER_HINT,
     SettingInputError,
     apply_daily_limit,
     apply_setting_text,
+    parse_turnover,
     prompt_for,
     remove_daily_limit,
     toggle_rule,
@@ -184,6 +187,7 @@ def _settings_text(settings: ScreenerSettings, profile_name: str | None = None) 
             settings.enable_dump,
             signed=True,
         ),
+        f"💧 Мин. оборот 24ч: {usd_short(settings.min_turnover_24h_usdt)}",
     ]
     if settings.symbol_daily_limits:
         caps = ", ".join(
@@ -599,6 +603,13 @@ async def on_toggle_rule(query: CallbackQuery, state: AppState) -> None:
 async def on_set_field(query: CallbackQuery, state: AppState) -> None:
     assert query.data is not None and query.from_user is not None
     parts = query.data.split(":")
+    if len(parts) == 3 and parts[1] == "turnover" and parts[2] == "value":
+        state.begin_setting_edit(query.from_user.id, "turnover", "value")
+        current = usd_short(state.signal_engine.settings.min_turnover_24h_usdt)
+        if query.message is not None:
+            await query.message.answer(f"{TURNOVER_HINT}\nСейчас: {current}.")
+        await query.answer()
+        return
     if len(parts) != 3 or parts[1] not in RULES or parts[2] not in FIELDS:
         await query.answer("Неизвестная настройка", show_alert=True)
         return
@@ -637,6 +648,27 @@ async def on_setting_value(message: Message, state: AppState) -> None:
             await message.answer(html.escape(str(exc)))
             return
         text, markup = _limits_screen(state)
+        await message.answer(text, reply_markup=markup)
+        return
+    if kind == "turnover":
+        try:
+            value = parse_turnover(message.text)
+        except SettingInputError as exc:
+            current = usd_short(state.signal_engine.settings.min_turnover_24h_usdt)
+            await message.answer(
+                f"{html.escape(str(exc))}\n{TURNOVER_HINT}\nСейчас: {current}."
+            )
+            return
+        updated = state.signal_engine.settings.model_copy(
+            update={"min_turnover_24h_usdt": value}
+        )
+        state.clear_pending_edit(message.from_user.id)
+        try:
+            await state.apply_settings(updated, chat_id=message.from_user.id)
+        except ProfileError as exc:
+            await message.answer(html.escape(str(exc)))
+            return
+        text, markup = _settings_screen(state)
         await message.answer(text, reply_markup=markup)
         return
     try:
