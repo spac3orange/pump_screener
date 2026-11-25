@@ -48,14 +48,6 @@ def rules_text(cfg: UserDetectionConfig) -> str:
             line(
                 "🟢", "Лонг (рост)", cfg.enable_long, cfg.long_threshold_pct, cfg.long_interval_sec
             ),
-            line(
-                "🔴",
-                "Шорт (падение)",
-                cfg.enable_short,
-                cfg.short_threshold_pct,
-                cfg.short_interval_sec,
-                "-",
-            ),
             line("🔻", "Дамп", cfg.enable_dump, cfg.dump_threshold_pct, cfg.dump_interval_sec, "-"),
             f"💧 Мин. оборот 24ч: {format_turnover(cfg.min_turnover_24h_usdt)}",
         ]
@@ -64,10 +56,10 @@ def rules_text(cfg: UserDetectionConfig) -> str:
 
 def welcome_text(settings: CommercialSettings, *, terms_needed: bool, trial: bool) -> str:
     lines = [
-        f"<b>{PRODUCT}</b> — сигналы о резких движениях цены на Bybit, Binance и Bitget "
+        f"<b>{PRODUCT}</b> — сигналы о резких движениях цены на Bybit "
         "(USDT Perpetual) по вашим правилам.",
         "",
-        "Вы сами задаёте процент и период для лонга, шорта и дампа в /settings.",
+        "Вы сами задаёте процент и период для лонга и дампа в /settings.",
     ]
     if trial:
         lines.append(
@@ -114,11 +106,9 @@ def account_text(view: AccountView) -> str:
 
 SETTINGS_INTRO_TEXT = (
     "🟢 Лонг — цена выросла на X% за N минут.\n"
-    "🔴 Шорт — цена упала на X% за N минут.\n"
-    "🔻 Дамп — резкое падение: обычно порог выше, а период короче, чем у Шорта.\n\n"
+    "🔻 Дамп — резкое падение цены на X% за N минут.\n\n"
     "<b>Примеры настроек:</b>\n"
     "🟢 Лонг 5% за 5 мин → рост на 5% и больше\n"
-    "🔴 Шорт 10% за 30 мин → падение на 10% и больше\n"
     "🔻 Дамп 30% за 10 мин → обвал на 30% и больше\n\n"
     "Сигнал сообщает о движении цены, это не рекомендация открыть сделку."
 )
@@ -194,10 +184,9 @@ def paysupport_text(settings: CommercialSettings) -> str:
 def help_text(settings: CommercialSettings) -> str:
     return (
         f"<b>{PRODUCT} — справка</b>\n\n"
-        "Бот следит за USDT Perpetual на Bybit, Binance и Bitget и присылает сигнал, когда цена "
+        "Бот следит за USDT Perpetual на Bybit и присылает сигнал, когда цена "
         "меняется на заданный процент за заданный период:\n"
         "🟢 <b>Лонг</b> — рост на X% за N минут\n"
-        "🔴 <b>Шорт</b> — падение на X% за N минут\n"
         "🔻 <b>Дамп</b> — сильное падение\n"
         "Монеты с оборотом за 24ч ниже порога пропускаются.\n\n"
         "<b>Команды</b>\n"

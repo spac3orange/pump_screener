@@ -32,10 +32,6 @@ _RULES = (
         "🟢", "рост цены", "Лонг",
     ),
     _RuleInfo(
-        SignalType.DROP, "enable_short", "short_threshold_pct", "short_interval_sec",
-        "🔴", "снижение цены", "Шорт",
-    ),
-    _RuleInfo(
         SignalType.DUMP, "enable_dump", "dump_threshold_pct", "dump_interval_sec",
         "🔻", "экстремальное падение", "Дамп",
     ),
@@ -115,10 +111,8 @@ def _rule_block(rule: _Rule, explanation: str, disclaimer: str) -> str:
 
 
 def _down_sample(settings: ScreenerSettings) -> tuple[list[RuleMatch], dict[SignalType, float]]:
-    drop, dump = _rule(settings, SignalType.DROP), _rule(settings, SignalType.DUMP)
-    active = [rule for rule in (dump, drop) if rule.enabled]
-    if not active:
-        active = [_rule(settings, SignalType.PUMP)]
+    dump = _rule(settings, SignalType.DUMP)
+    active = [dump] if dump.enabled else [_rule(settings, SignalType.PUMP)]
     matches: list[RuleMatch] = []
     pcts: dict[SignalType, float] = {}
     price: float | None = None
@@ -130,7 +124,6 @@ def _down_sample(settings: ScreenerSettings) -> tuple[list[RuleMatch], dict[Sign
             factor = 1 + pct / 100 if signal_type is SignalType.PUMP else 1 - pct / 100
             price = prev * factor
         else:
-            # A longer-window rule of the same move: deeper change from a higher start.
             pct = min(max(_sample_pct(rule), max(pcts.values()) + 5.0), 99.0)
             prev = price / (1 - pct / 100)
         pcts[signal_type] = pct
@@ -180,7 +173,7 @@ def _part_overview(settings: ScreenerSettings, instruments: int | None) -> str:
     blocks = [
         "❓ <b>Как работают сигналы</b>\n"
         "Бот круглосуточно следит за криптовалютными USDT perpetual-фьючерсами "
-        "Bybit, Binance и Bitget (без TradFi, pre-launch и срочных фьючерсов) и ловит резкие "
+        "Bybit (без TradFi, pre-launch и срочных фьючерсов) и ловит резкие "
         "изменения <code>lastPrice</code>. Список инструментов обновляется "
         "автоматически.\n"
         f"{universe}"
@@ -196,20 +189,10 @@ def _part_overview(settings: ScreenerSettings, instruments: int | None) -> str:
             f"{pump.minutes} назад. Это сильный восходящий импульс, возможен резкий "
             "рост интереса к инструменту. Движение может продолжиться, а может "
             "быстро откатиться.",
-            "PUMP не означает автоматически «открывать Long». "
+            "PUMP (Лонг) не означает автоматически «открывать Long». "
             "Это только факт сильного роста цены.",
         ),
     ]
-    drop = _rule(settings, SignalType.DROP)
-    blocks.append(
-        _rule_block(
-            drop,
-            f"Цена сейчас на {_pct(drop.threshold_pct)}% или больше ниже, чем "
-            f"{drop.minutes} назад. Это выраженное нисходящее движение; к моменту "
-            "сигнала значительная часть падения уже могла пройти.",
-            "DROP не означает автоматически «открывать Short».",
-        )
-    )
     dump = _rule(settings, SignalType.DUMP)
     blocks.append(
         _rule_block(
@@ -225,18 +208,14 @@ def _part_overview(settings: ScreenerSettings, instruments: int | None) -> str:
 
 def _part_reading(settings: ScreenerSettings) -> str:
     alert, pcts = _sample_alert(settings)
-    drop, dump = _rule(settings, SignalType.DROP), _rule(settings, SignalType.DUMP)
-    if drop.enabled and dump.enabled:
+    dump = _rule(settings, SignalType.DUMP)
+    if dump.enabled and SignalType.DUMP in pcts:
         combo = (
-            f"Например, за {dump.minutes} цена упала на {_pct(pcts[SignalType.DUMP])}%, "
-            f"а за {drop.minutes} — на {_pct(pcts[SignalType.DROP])}%. "
-            "Тогда одновременно выполняются условия DROP и DUMP."
+            f"Например, за {dump.minutes} цена упала на {_pct(pcts[SignalType.DUMP])}%. "
+            "Тогда выполняется условие DUMP."
         )
     else:
-        combo = (
-            "Например, одно и то же падение может выполнить и DROP, и DUMP, "
-            "если оба правила включены."
-        )
+        combo = "Например, сильное падение выполняет условие DUMP, если правило включено."
     exclusions = ""
     if settings.exclude_symbols:
         names = ", ".join(escape(s) for s in sorted(settings.exclude_symbols))

@@ -39,18 +39,45 @@ async def test_long_fires_at_40_percent_in_12_minutes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_drop_fires_at_minus_10_percent_in_30_minutes() -> None:
-    h = Harness(enable_long=False, enable_dump=False)
+async def test_overshoot_above_threshold_still_fires() -> None:
+    """1min/10%: a 50% move must fire; only moves below 10% are ignored."""
+    h = Harness(
+        enable_dump=False,
+        long_threshold_pct=10.0,
+        long_interval_sec=60,
+    )
+    await _seed(h, "BTCUSDT", 100.0)
+    await h.send("BTCUSDT", "delta", _at(60), lastPrice="150")
+    await h.drain()
+    assert len(h.signals) == 1
+    assert h.signals[0].change_pct == pytest.approx(50.0)
+
+
+@pytest.mark.asyncio
+async def test_below_threshold_does_not_fire() -> None:
+    h = Harness(
+        enable_dump=False,
+        long_threshold_pct=10.0,
+        long_interval_sec=60,
+    )
+    await _seed(h, "BTCUSDT", 100.0)
+    await h.send("BTCUSDT", "delta", _at(60), lastPrice="109.9")
+    await h.drain()
+    assert h.signals == []
+
+
+@pytest.mark.asyncio
+async def test_short_rule_never_fires_even_if_enabled_in_settings() -> None:
+    h = Harness(enable_long=False, enable_dump=False, enable_short=True)
     await _seed(h, "ETHUSDT", 100.0)
     await h.send("ETHUSDT", "delta", _at(1800), lastPrice="90")
     await h.drain()
-    assert [s.signal_type for s in h.signals] == [SignalType.DROP]
-    assert h.signals[0].interval_sec == 1800
+    assert h.signals == []
 
 
 @pytest.mark.asyncio
 async def test_dump_fires_at_minus_40_percent_in_15_minutes() -> None:
-    h = Harness(enable_long=False, enable_short=False)
+    h = Harness(enable_long=False)
     await _seed(h, "SOLUSDT", 100.0)
     await h.send("SOLUSDT", "delta", _at(900), lastPrice="60")
     await h.drain()
@@ -69,7 +96,7 @@ async def test_disabled_rule_never_fires() -> None:
 
 @pytest.mark.asyncio
 async def test_no_spam_on_small_increments() -> None:
-    h = Harness(enable_short=False, enable_dump=False)
+    h = Harness(enable_dump=False)
     await _seed(h, "SOLUSDT", 100.0)
     await h.send("SOLUSDT", "delta", _at(720), lastPrice="140")
     await h.send("SOLUSDT", "delta", _at(721), lastPrice="140.2")
@@ -103,7 +130,7 @@ async def test_enrichment_delta_does_not_evaluate() -> None:
 
 @pytest.mark.asyncio
 async def test_one_lookup_per_unique_window() -> None:
-    h = Harness(long_interval_sec=900, short_interval_sec=900, dump_interval_sec=900)
+    h = Harness(long_interval_sec=900, dump_interval_sec=900)
     await _seed(h, "ZUSDT", 100.0)
     await h.drain()
     await h.send("ZUSDT", "delta", _at(900), lastPrice="101")
@@ -117,7 +144,7 @@ async def test_one_lookup_per_unique_window() -> None:
 @pytest.mark.asyncio
 async def test_fast_spike_100_141_120_is_detected() -> None:
     """Regression: a threshold crossing that reverts before processing must not be lost."""
-    h = Harness(enable_short=False, enable_dump=False)
+    h = Harness(enable_dump=False)
     await _seed(h, "SPKUSDT", 100.0)
     await h.drain()
     # Both live events are queued before the first is processed.
@@ -134,28 +161,34 @@ async def test_fast_spike_100_141_120_is_detected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_drop_then_dump_on_consecutive_events_is_one_signal() -> None:
-    h = Harness(enable_long=False, correlation_window_ms=50)
+async def test_dump_overshoot_correlates_to_one_signal() -> None:
+    h = Harness(enable_long=False, correlation_window_ms=50, dump_threshold_pct=20.0)
     await _seed(h, "XYZUSDT", 100.0)
-    await h.send("XYZUSDT", "delta", _at(1800), lastPrice="89")  # DROP 30m -11%
-    await h.send("XYZUSDT", "delta", _at(1800.2), lastPrice="58")  # DUMP 15m -42%
+    await h.send("XYZUSDT", "delta", _at(900), lastPrice="75")  # -25%
+    await h.send("XYZUSDT", "delta", _at(900.2), lastPrice="58")  # -42%
     await h.drain()
     assert h.signals == []  # still inside the correlation window
     await asyncio.sleep(0.1)
     assert len(h.signals) == 1
     signal = h.signals[0]
     assert signal.primary.signal_type is SignalType.DUMP
-    assert {m.signal_type for m in signal.matches} == {SignalType.DROP, SignalType.DUMP}
+    assert {m.signal_type for m in signal.matches} == {SignalType.DUMP}
 
 
 @pytest.mark.asyncio
 async def test_moves_further_apart_than_window_stay_separate() -> None:
-    h = Harness(enable_long=False, correlation_window_ms=30)
+    h = Harness(
+        enable_long=False,
+        correlation_window_ms=30,
+        dump_threshold_pct=10.0,
+        cooldown_sec=0,
+        escalate_step_pct=0.1,
+    )
     await _seed(h, "SEPUSDT", 100.0)
-    await h.send("SEPUSDT", "delta", _at(1800), lastPrice="89")
+    await h.send("SEPUSDT", "delta", _at(900), lastPrice="85")
     await h.drain()
     await asyncio.sleep(0.08)
-    await h.send("SEPUSDT", "delta", _at(1800.5), lastPrice="58")
+    await h.send("SEPUSDT", "delta", _at(900.5), lastPrice="50")
     await h.drain()
     await asyncio.sleep(0.08)
-    assert [s.signal_type for s in h.signals] == [SignalType.DROP, SignalType.DUMP]
+    assert [s.signal_type for s in h.signals] == [SignalType.DUMP, SignalType.DUMP]

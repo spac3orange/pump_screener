@@ -2,15 +2,18 @@ import pytest
 from aiogram.types import Chat, Message, Update, User
 from pydantic import ValidationError
 
-from screener.config import ScreenerSettings
-from screener.infrastructure.telegram.keyboards import settings_keyboard
+from screener.config import ScreenerSettings, normalize_symbol
+from screener.infrastructure.telegram.keyboards import settings_keyboard, symbol_limits_keyboard
 from screener.infrastructure.telegram.middleware import _command_user_id
 from screener.infrastructure.telegram.settings_input import (
     SettingInputError,
+    apply_daily_limit,
     apply_setting_text,
+    parse_daily_limit,
     parse_percent,
     parse_period_minutes,
     prompt_for,
+    remove_daily_limit,
     toggle_rule,
 )
 
@@ -18,36 +21,45 @@ from screener.infrastructure.telegram.settings_input import (
 def test_toggle_rule_flips_only_that_rule() -> None:
     updated = toggle_rule(ScreenerSettings(), "dump")
     assert updated.enable_dump is False
-    assert updated.enable_long is True and updated.enable_short is True
+    assert updated.enable_long is True and updated.enable_short is False
+    with pytest.raises(SettingInputError):
+        toggle_rule(ScreenerSettings(), "short")
     with pytest.raises(SettingInputError):
         toggle_rule(ScreenerSettings(), "volume")
 
 
-def test_settings_keyboard_has_toggles_and_six_buttons() -> None:
-    markup = settings_keyboard(ScreenerSettings(enable_short=False))
+def test_settings_keyboard_has_long_dump_and_limits() -> None:
+    markup = settings_keyboard(ScreenerSettings(), binance_available=False, bitget_available=False)
     toggles = markup.inline_keyboard[0]
-    assert [b.text for b in toggles] == ["Лонг ON", "Шорт OFF", "Дамп ON"]
-    assert [b.callback_data for b in toggles] == ["toggle:long", "toggle:short", "toggle:dump"]
-    *rule_rows, exchanges, nav = markup.inline_keyboard[1:]
+    assert [b.text for b in toggles] == ["Лонг ON", "Дамп ON"]
+    assert [b.callback_data for b in toggles] == ["toggle:long", "toggle:dump"]
+    *rule_rows, exchanges, limits, nav = markup.inline_keyboard[1:]
     assert [b.callback_data for b in nav] == ["prof:list"]
-    assert [b.callback_data for b in exchanges] == ["ex:bybit", "ex:binance", "ex:bitget"]
+    assert [b.callback_data for b in exchanges] == ["ex:bybit"]
+    assert [b.callback_data for b in limits] == ["limits:list"]
     buttons = [button for row in rule_rows for button in row]
     assert [button.text for button in buttons] == [
         "🟢 Период лонг",
         "➗ Процент лонг",
-        "🔴 Период шорт",
-        "➗ Процент шорт",
         "🔻 Период дамп",
         "➗ Процент дамп",
     ]
     assert [button.callback_data for button in buttons] == [
         "set:long:period",
         "set:long:pct",
-        "set:short:period",
-        "set:short:pct",
         "set:dump:period",
         "set:dump:pct",
     ]
+
+
+def test_symbol_limits_keyboard_lists_caps() -> None:
+    settings = ScreenerSettings(symbol_daily_limits={"BTCUSDT": 2, "ETHUSDT": 1})
+    markup = symbol_limits_keyboard(settings)
+    flat = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert flat[0] == "limits:add"
+    assert "limits:del:BTCUSDT" in flat
+    assert "limits:del:ETHUSDT" in flat
+    assert flat[-1] == "limits:back"
 
 
 @pytest.mark.parametrize(
@@ -78,19 +90,18 @@ def test_parse_percent_rejects(text: str) -> None:
         parse_percent(text)
 
 
-@pytest.mark.parametrize("kind", ["short", "dump"])
-def test_fall_rules_reject_impossible_percent(kind: str) -> None:
+def test_dump_rejects_impossible_percent() -> None:
     with pytest.raises(SettingInputError):
-        apply_setting_text(ScreenerSettings(), kind, "pct", "100")
+        apply_setting_text(ScreenerSettings(), "dump", "pct", "100")
     assert apply_setting_text(ScreenerSettings(), "long", "pct", "150").long_threshold_pct == 150
 
 
 def test_apply_setting_text_updates_only_the_chosen_field() -> None:
     settings = ScreenerSettings()
-    updated = apply_setting_text(settings, "short", "period", "25")
-    assert updated.short_interval_sec == 1500
+    updated = apply_setting_text(settings, "dump", "period", "25")
+    assert updated.dump_interval_sec == 1500
     assert updated.long_interval_sec == settings.long_interval_sec
-    assert updated.short_threshold_pct == settings.short_threshold_pct
+    assert updated.dump_threshold_pct == settings.dump_threshold_pct
 
     updated = apply_setting_text(settings, "dump", "pct", "15.5")
     assert updated.dump_threshold_pct == 15.5
@@ -102,7 +113,26 @@ def test_prompt_shows_current_values() -> None:
     assert prompt_for("long", "period", settings) == (
         "Введите период лонг в минутах (1–60). Сейчас: 12."
     )
-    assert prompt_for("short", "pct", settings) == "Введите процент шорт (до 99). Сейчас: 10."
+    assert prompt_for("dump", "pct", settings) == "Введите процент дамп (до 99). Сейчас: 40."
+
+
+def test_normalize_symbol_and_daily_limit_parse() -> None:
+    assert normalize_symbol("btc") == "BTCUSDT"
+    assert normalize_symbol("BTCUSDT") == "BTCUSDT"
+    assert parse_daily_limit("BTC 2") == ("BTCUSDT", 2)
+    assert parse_daily_limit("ethusdt 3") == ("ETHUSDT", 3)
+    with pytest.raises(SettingInputError):
+        parse_daily_limit("BTC")
+    with pytest.raises(SettingInputError):
+        parse_daily_limit("BTC 0")
+
+
+def test_apply_and_remove_daily_limit() -> None:
+    settings = ScreenerSettings()
+    updated = apply_daily_limit(settings, "btc 2")
+    assert updated.symbol_daily_limits == {"BTCUSDT": 2}
+    cleared = remove_daily_limit(updated, "BTCUSDT")
+    assert cleared.symbol_daily_limits == {}
 
 
 def test_rule_interval_accepts_any_whole_minute() -> None:

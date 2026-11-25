@@ -15,8 +15,10 @@ from screener.application.profiles import ActiveProfile, ProfileService
 from screener.application.signal_engine import SignalEngine
 from screener.application.trading.lifecycle import PositionLifecycleService
 from screener.application.trading.service import TradingService
+from screener.application.metrics import metrics
+from screener.application.symbol_daily_limiter import SymbolDailyLimiter
 from screener.config import ScreenerSettings, SystemSettings, TradingSettings
-from screener.domain.exchanges import ALL_EXCHANGES
+from screener.domain.exchanges import BYBIT
 from screener.domain.models import MarketSignal
 from screener.infrastructure.bybit.rest import BybitRestClient
 from screener.infrastructure.bybit.ws import WebSocketManager
@@ -52,8 +54,9 @@ class AppState:
     lifecycle: PositionLifecycleService | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     commercial: CommercialRuntime | None = None
-    admin_exchanges: set[str] = field(default_factory=lambda: set(ALL_EXCHANGES))
+    admin_exchanges: set[str] = field(default_factory=lambda: {BYBIT})
     feeds: dict[str, Any] = field(default_factory=dict)
+    symbol_daily_limiter: SymbolDailyLimiter = field(default_factory=SymbolDailyLimiter)
     # telegram user_id -> (kind, field, monotonic deadline); bounded and expiring because
     # subscribers can open prompts too.
     pending_edits: dict[int, tuple[str, str, float]] = field(default_factory=dict)
@@ -67,6 +70,29 @@ class AppState:
         self._dispatch(signal, to_trading=False)
 
     def _dispatch(self, signal: MarketSignal, *, to_trading: bool) -> None:
+        limits: dict[str, int] = {}
+        if self.signal_engine is not None:
+            limits = self.signal_engine.settings.symbol_daily_limits
+        cap = limits.get(signal.symbol)
+        if not self.symbol_daily_limiter.allow(
+            signal.symbol,
+            exchange=signal.exchange,
+            limit=cap,
+            now=signal.detected_at,
+        ):
+            metrics.signals_daily_limited_total += 1
+            log(
+                logger,
+                logging.INFO,
+                f"Daily limit reached for {signal.exchange}:{signal.symbol} "
+                f"(max={cap})",
+                component="app_state",
+                event="signal_daily_limited",
+                symbol=signal.symbol,
+                signal_id=str(signal.id),
+                signal_type=signal.signal_type.value,
+            )
+            return
         log(
             logger,
             logging.DEBUG,
@@ -83,6 +109,10 @@ class AppState:
             self.notifications.enqueue(signal)
         if to_trading and self.trading is not None:
             self.trading.enqueue(signal)
+        if cap is not None:
+            self.symbol_daily_limiter.record(
+                signal.symbol, signal.exchange, now=signal.detected_at
+            )
 
     async def set_admin_exchanges(self, exchanges: set[str]) -> None:
         self.admin_exchanges = set(exchanges)

@@ -23,7 +23,7 @@ def settings(**kwargs) -> ScreenerSettings:
         enable_long=True,
         long_threshold_pct=40.0,
         long_interval_sec=720,
-        enable_short=True,
+        enable_short=False,
         short_threshold_pct=10.0,
         short_interval_sec=1800,
         enable_dump=True,

@@ -211,17 +211,28 @@ async def test_config_hash_is_order_independent() -> None:
     b = settings(exclude_symbols={"C", "A", "B"})
     assert a.canonical_config() == b.canonical_config()
     assert a.config_hash() == b.config_hash()
-    assert ScreenerSettings.from_profile_config(a.canonical_config(), 1) == a
+    assert ScreenerSettings.from_profile_config(
+        a.canonical_config(), MONITORING_CONFIG_SCHEMA_VERSION
+    ) == a
+
+
+async def test_profile_config_v1_adds_symbol_daily_limits() -> None:
+    v1 = {k: v for k, v in LEGACY.canonical_config().items() if k != "symbol_daily_limits"}
+    loaded = ScreenerSettings.from_profile_config(v1, 1)
+    assert loaded.symbol_daily_limits == {}
+    assert loaded.long_threshold_pct == LEGACY.long_threshold_pct
 
 
 async def test_profile_config_rejects_unknown_or_missing_fields() -> None:
     config = LEGACY.canonical_config()
     with pytest.raises(ValueError):
-        ScreenerSettings.from_profile_config({**config, "telegram_bot_token": "x"}, 1)
+        ScreenerSettings.from_profile_config(
+            {**config, "telegram_bot_token": "x"}, MONITORING_CONFIG_SCHEMA_VERSION
+        )
     missing = dict(config)
     missing.pop("long_threshold_pct")
     with pytest.raises(ValueError):
-        ScreenerSettings.from_profile_config(missing, 1)
+        ScreenerSettings.from_profile_config(missing, MONITORING_CONFIG_SCHEMA_VERSION)
     with pytest.raises(ValueError):
         ScreenerSettings.from_profile_config(config, MONITORING_CONFIG_SCHEMA_VERSION + 1)
 
@@ -605,10 +616,16 @@ async def test_profiles_view_escapes_names_and_protects_buttons() -> None:
 
 def test_rules_summary_shows_off_rules() -> None:
     lines = rules_summary(
-        settings(enable_short=False, long_threshold_pct=33, long_interval_sec=420)
+        settings(
+            enable_dump=False,
+            long_threshold_pct=33,
+            long_interval_sec=420,
+            symbol_daily_limits={"BTCUSDT": 2},
+        )
     )
     assert "PUMP: 33% / 7m" in lines
-    assert any(line.startswith("DROP: OFF") for line in lines)
+    assert any(line.startswith("DUMP: OFF") for line in lines)
+    assert "Daily caps: BTCUSDT:2" in lines
 
 
 class _Query:

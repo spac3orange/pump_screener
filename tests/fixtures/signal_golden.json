@@ -55,17 +55,6 @@
   ]
  },
  {
-  "symbol": "G05USDT",
-  "type": "DROP",
-  "interval_sec": 1800,
-  "change_pct": -12.0,
-  "price": 132.0,
-  "level": 1,
-  "matches": [
-   "DROP:1800"
-  ]
- },
- {
   "symbol": "G07USDT",
   "type": "PUMP",
   "interval_sec": 720,

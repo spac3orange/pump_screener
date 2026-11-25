@@ -1,8 +1,11 @@
 # Agent notes — Bybit Market Screener
 
-- Stack: Python 3.12, FastAPI, asyncio, SQLAlchemy async, PostgreSQL, aiogram 3, Bybit V5 public API, Binance USDⓈ-M public API, Bitget UTA v3 public API (Binance and Bitget are signals only).
-- Signal price source is **lastPrice** only (Bybit `lastPrice`, Binance ticker `c`, Bitget ticker `lastPrice`).
+- Stack: Python 3.12, FastAPI, asyncio, SQLAlchemy async, PostgreSQL, aiogram 3, Bybit V5 public API.
+  Binance/Bitget feeds exist in code but default off (`BINANCE_ENABLED=false`, `BITGET_ENABLED=false`).
+- Signal price source is **lastPrice** only (Bybit `lastPrice`).
 - Monitor crypto USDT Linear Perpetual only (no TradFi, no PreLaunch, no expiry futures).
+- Active detection rules: **Long (PUMP) + Dump (DUMP)** only; DROP/short is not evaluated.
+- Optional per-symbol daily caps (`symbol_daily_limits`) use UTC calendar days; enforced in `AppState._dispatch`.
 - Trading is **optional** (`BYBIT_TRADING_MODE=disabled|demo|mainnet`); screener works without private keys.
 - Auto-trading is **Bybit only**. Binance and Bitget signals use `dispatch_monitor_signal` (persist + notify, never `trading.enqueue`); `TradingService.enqueue` also ignores `exchange != bybit`.
 - Auto-trading consumes final `MarketSignal` only (never Telegram→order); Telegram `/trading` is ON/OFF + stats.

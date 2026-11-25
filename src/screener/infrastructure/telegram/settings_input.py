@@ -2,27 +2,25 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-RULES = ("long", "short", "dump")
+from screener.config import ScreenerSettings, normalize_symbol
+
+RULES = ("long", "dump")
 FIELDS = ("period", "pct")
 
 _NAMES = {
     "long": "лонг",
-    "short": "шорт",
     "dump": "дамп",
 }
 _PERIOD_ATTR = {
     "long": "long_interval_sec",
-    "short": "short_interval_sec",
     "dump": "dump_interval_sec",
 }
 _PCT_ATTR = {
     "long": "long_threshold_pct",
-    "short": "short_threshold_pct",
     "dump": "dump_threshold_pct",
 }
 _ENABLE_ATTR = {
     "long": "enable_long",
-    "short": "enable_short",
     "dump": "enable_dump",
 }
 
@@ -50,7 +48,7 @@ def parse_period_minutes(text: str) -> int:
     return minutes * 60
 
 
-_MAX_PCT = {"long": 500.0, "short": 99.0, "dump": 99.0}
+_MAX_PCT = {"long": 500.0, "dump": 99.0}
 
 
 def parse_percent(text: str, max_pct: float = 500.0) -> float:
@@ -69,6 +67,9 @@ _TURNOVER_SUFFIX = {"k": 1_000, "к": 1_000, "m": 1_000_000, "м": 1_000_000}
 TURNOVER_HINT = (
     "Введите минимальный оборот за 24ч в USDT, например 500000, 500k или 1m (0 — без фильтра)."
 )
+DAILY_LIMIT_HINT = (
+    "Введите пару и максимум сигналов в сутки UTC, например: BTC 2 или BTCUSDT 3."
+)
 
 
 def parse_turnover(text: str) -> float:
@@ -85,6 +86,21 @@ def parse_turnover(text: str) -> float:
     if value < 0 or value > 1_000_000_000 or value != value:
         raise SettingInputError("Нужно число USDT от 0 до 1 000 000 000.")
     return round(value, 2)
+
+
+def parse_daily_limit(text: str) -> tuple[str, int]:
+    parts = text.strip().split()
+    if len(parts) != 2:
+        raise SettingInputError(DAILY_LIMIT_HINT)
+    symbol = normalize_symbol(parts[0])
+    if not symbol or not symbol.endswith("USDT") or len(symbol) < 5:
+        raise SettingInputError("Некорректная пара. Пример: BTC или BTCUSDT.")
+    if not parts[1].isdigit():
+        raise SettingInputError("Максимум сигналов — целое число от 1.")
+    limit = int(parts[1])
+    if limit < 1 or limit > 10_000:
+        raise SettingInputError("Максимум сигналов — целое число от 1 до 10000.")
+    return symbol, limit
 
 
 def toggle_rule[M: BaseModel](settings: M, kind: str) -> M:
@@ -110,3 +126,17 @@ def apply_setting_text[M: BaseModel](
     else:
         raise SettingInputError("Неизвестная настройка.")
     return updated
+
+
+def apply_daily_limit(settings: ScreenerSettings, text: str) -> ScreenerSettings:
+    symbol, limit = parse_daily_limit(text)
+    limits = dict(settings.symbol_daily_limits)
+    limits[symbol] = limit
+    return settings.model_copy(update={"symbol_daily_limits": limits})
+
+
+def remove_daily_limit(settings: ScreenerSettings, symbol: str) -> ScreenerSettings:
+    key = normalize_symbol(symbol)
+    limits = dict(settings.symbol_daily_limits)
+    limits.pop(key, None)
+    return settings.model_copy(update={"symbol_daily_limits": limits})

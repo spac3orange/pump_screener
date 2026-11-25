@@ -6,11 +6,11 @@ from screener.config import ScreenerSettings, SystemSettings, get_system_setting
 
 def test_binance_system_defaults() -> None:
     s = SystemSettings(_env_file=None)
-    assert s.binance_enabled is True
+    assert s.binance_enabled is False
     assert s.binance_rest_base == "https://fapi.binance.com"
     assert "market/stream" in s.binance_ws_market
     assert s.binance_kline_concurrency == 4
-    assert s.bitget_enabled is True
+    assert s.bitget_enabled is False
     assert s.bitget_rest_base == "https://api.bitget.com"
     assert s.bitget_ws_public == "wss://ws.bitget.com/v3/ws/public"
     assert s.bitget_symbols_per_connection == 40
@@ -22,10 +22,12 @@ def test_screener_settings_defaults() -> None:
     assert s.enable_long is True
     assert s.long_threshold_pct == 40.0
     assert s.long_interval_sec == 720
+    assert s.enable_short is False
     assert s.short_threshold_pct == 10.0
     assert s.short_interval_sec == 1800
     assert s.dump_threshold_pct == 40.0
     assert s.dump_interval_sec == 900
+    assert s.symbol_daily_limits == {}
     assert s.allow_mixed_history is True
     assert s.correlation_window_ms == 400
     assert s.rule_version()

@@ -28,12 +28,18 @@ def _rule(name: str, enabled: bool, pct: float, interval_sec: int, *, minus: boo
 
 def rules_summary(settings: ScreenerSettings) -> list[str]:
     s = settings
-    return [
+    lines = [
         _rule("PUMP", s.enable_long, s.long_threshold_pct, s.long_interval_sec),
-        _rule("DROP", s.enable_short, s.short_threshold_pct, s.short_interval_sec, minus=True),
         _rule("DUMP", s.enable_dump, s.dump_threshold_pct, s.dump_interval_sec, minus=True),
         f"Min turnover: {usd_short(s.min_turnover_24h_usdt)}",
     ]
+    if s.symbol_daily_limits:
+        caps = ", ".join(
+            f"{symbol}:{s.symbol_daily_limits[symbol]}"
+            for symbol in sorted(s.symbol_daily_limits)
+        )
+        lines.append(f"Daily caps: {caps}")
+    return lines
 
 
 def profiles_list_text(profiles: list[MonitoringProfile], active_id: UUID | None) -> str:

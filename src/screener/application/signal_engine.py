@@ -35,9 +35,9 @@ class _EngineConfig:
 
 def _rules_from(settings: ScreenerSettings) -> tuple[_Rule, ...]:
     s = settings
+    # DROP/short is intentionally omitted: product keeps Long + Dump only.
     candidates = (
         (s.enable_long, SignalType.PUMP, s.long_threshold_pct, s.long_interval_sec),
-        (s.enable_short, SignalType.DROP, s.short_threshold_pct, s.short_interval_sec),
         (s.enable_dump, SignalType.DUMP, s.dump_threshold_pct, s.dump_interval_sec),
     )
     return tuple(

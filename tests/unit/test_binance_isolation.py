@@ -62,6 +62,7 @@ def test_dispatch_monitor_signal_never_calls_trading() -> None:
         persistence=SimpleNamespace(enqueue_signal=persisted.append),  # type: ignore[arg-type]
         notifications=SimpleNamespace(enqueue=notified.append),  # type: ignore[arg-type]
         trading=SimpleNamespace(enqueue=enqueued.append),  # type: ignore[arg-type]
+        admin_exchanges={"bybit", "binance"},
     )
     sig = make_signal(SignalType.PUMP, 720, 41.0, exchange="binance")
     state.dispatch_monitor_signal(sig)
@@ -103,6 +104,7 @@ async def test_binance_live_tick_reaches_notifications_not_trading() -> None:
         persistence=SimpleNamespace(enqueue_signal=persisted.append),  # type: ignore[arg-type]
         notifications=SimpleNamespace(enqueue=notified.append),  # type: ignore[arg-type]
         trading=SimpleNamespace(enqueue=enqueued.append),  # type: ignore[arg-type]
+        admin_exchanges={"binance"},
     )
     correlator.on_signal = state.dispatch_monitor_signal
 

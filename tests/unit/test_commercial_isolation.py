@@ -82,7 +82,7 @@ async def test_commercial_signals_never_reach_trading_or_admin_dispatch() -> Non
         rest=None,  # type: ignore[arg-type]
         history=None,  # type: ignore[arg-type]
         processor=None,  # type: ignore[arg-type]
-        signal_engine=None,  # type: ignore[arg-type]
+        signal_engine=h.engine,
         correlator=None,  # type: ignore[arg-type]
         registry=None,  # type: ignore[arg-type]
         ws_manager=None,  # type: ignore[arg-type]

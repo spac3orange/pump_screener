@@ -19,8 +19,6 @@ def _custom() -> ScreenerSettings:
     return ScreenerSettings(
         long_threshold_pct=33,
         long_interval_sec=420,
-        short_threshold_pct=11,
-        short_interval_sec=1500,
         dump_threshold_pct=44,
         dump_interval_sec=1020,
         min_turnover_24h_usdt=250_000,
@@ -68,14 +66,16 @@ def test_help_builds_with_defaults() -> None:
     text = "\n".join(parts)
     assert "521" in text
     assert "Signal 24h" in text
-    assert "PUMP не означает автоматически «открывать Long»" in text
-    assert "DROP не означает автоматически «открывать Short»" in text
+    assert "PUMP (Лонг) не означает автоматически «открывать Long»" in text
+    assert "DUMP не означает автоматически" in text
+    assert "DROP" not in text
+    assert "Bybit" in text
+    assert "pre-launch" in text
 
 
 def test_current_thresholds_and_intervals_are_shown() -> None:
     text = _text(_custom())
     assert f"+33% за 7{NBSP}мин" in text
-    assert f"−11% за 25{NBSP}мин" in text
     assert f"−44% за 17{NBSP}мин" in text
     assert f"через 2{NBSP}мин" in text
     assert "3.5 п.п." in text
@@ -84,10 +84,10 @@ def test_current_thresholds_and_intervals_are_shown() -> None:
 def test_help_follows_settings_changes() -> None:
     base = ScreenerSettings()
     updated = apply_setting_text(base, "long", "pct", "27.5")
-    updated = apply_setting_text(updated, "short", "period", "45")
+    updated = apply_setting_text(updated, "dump", "period", "20")
     text = _text(updated)
     assert f"+27.5% за 12{NBSP}мин" in text
-    assert f"−10% за 45{NBSP}мин" in text
+    assert f"−40% за 20{NBSP}мин" in text
     assert "+40% за" not in text
 
 
@@ -97,11 +97,11 @@ def test_disabled_rule_is_marked() -> None:
     assert "DUMP («Дамп»): <b>выключен</b>" in text
     assert f"−40% за 15{NBSP}мин" not in text
     assert "Дамп:" not in text  # sample alert only uses enabled rules
-    assert "Шорт:" in text
+    assert "Лонг:" in text
 
 
 def test_all_down_rules_disabled_still_renders_sample() -> None:
-    settings = toggle_rule(toggle_rule(ScreenerSettings(), "dump"), "short")
+    settings = toggle_rule(ScreenerSettings(), "dump")
     parts = build_help_messages(settings)
     assert "Лонг:" in parts[1]
 

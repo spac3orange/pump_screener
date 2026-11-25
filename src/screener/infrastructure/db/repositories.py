@@ -146,6 +146,36 @@ class Repository:
             )
             return int(result.scalar_one())
 
+    async def count_signals_since_utc_day(
+        self,
+        *,
+        now: datetime | None = None,
+        symbols: set[str] | None = None,
+    ) -> dict[tuple[str, str], int]:
+        """Counts of persisted signals for the current UTC calendar day.
+
+        Returns ``{(exchange, symbol): count}``. When ``symbols`` is set, only
+        those symbols are counted (empty set → empty result).
+        """
+        instant = now if now is not None else datetime.now(UTC)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=UTC)
+        day_start = instant.astimezone(UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        if symbols is not None and not symbols:
+            return {}
+        conditions = [SignalRow.detected_at >= day_start]
+        if symbols is not None:
+            conditions.append(SignalRow.symbol.in_(sorted(symbols)))
+        async with session_scope(self._sf) as session:
+            result = await session.execute(
+                select(SignalRow.exchange, SignalRow.symbol, func.count())
+                .where(*conditions)
+                .group_by(SignalRow.exchange, SignalRow.symbol)
+            )
+            return {(str(ex), str(sym)): int(n) for ex, sym, n in result.all()}
+
     async def recent_signals(self, limit: int = 20) -> list[SignalRow]:
         async with session_scope(self._sf) as session:
             result = await session.execute(

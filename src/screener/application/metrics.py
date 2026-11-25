@@ -111,6 +111,7 @@ class Metrics:
     rule_matches_total: int = 0
     signals_total: int = 0
     signals_correlated_total: int = 0
+    signals_daily_limited_total: int = 0
     persistence_drops_total: int = 0
     persistence_failures_total: int = 0
     notification_drops_total: int = 0

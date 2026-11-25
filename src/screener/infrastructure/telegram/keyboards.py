@@ -68,19 +68,12 @@ def settings_keyboard(
                 text=f"Лонг {_flag(settings.enable_long)}", callback_data="toggle:long"
             ),
             InlineKeyboardButton(
-                text=f"Шорт {_flag(settings.enable_short)}", callback_data="toggle:short"
-            ),
-            InlineKeyboardButton(
                 text=f"Дамп {_flag(settings.enable_dump)}", callback_data="toggle:dump"
             ),
         ],
         [
             InlineKeyboardButton(text="🟢 Период лонг", callback_data="set:long:period"),
             InlineKeyboardButton(text="➗ Процент лонг", callback_data="set:long:pct"),
-        ],
-        [
-            InlineKeyboardButton(text="🔴 Период шорт", callback_data="set:short:period"),
-            InlineKeyboardButton(text="➗ Процент шорт", callback_data="set:short:pct"),
         ],
         [
             InlineKeyboardButton(text="🔻 Период дамп", callback_data="set:dump:period"),
@@ -96,6 +89,30 @@ def settings_keyboard(
                 code, binance_available=binance_available, bitget_available=bitget_available
             )
         ],
+        [
+            InlineKeyboardButton(
+                text=f"Лимиты монет ({len(settings.symbol_daily_limits)})",
+                callback_data="limits:list",
+            )
+        ],
         [InlineKeyboardButton(text="📁 Профили", callback_data="prof:list")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def symbol_limits_keyboard(settings: ScreenerSettings) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="➕ Добавить лимит", callback_data="limits:add")],
+    ]
+    for symbol in sorted(settings.symbol_daily_limits):
+        max_n = settings.symbol_daily_limits[symbol]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{symbol}: {max_n}/сутки",
+                    callback_data=f"limits:del:{symbol}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="limits:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

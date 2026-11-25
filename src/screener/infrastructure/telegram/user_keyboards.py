@@ -137,11 +137,9 @@ def user_settings_keyboard(
     rows = [
         [
             _btn(f"Лонг {_flag(cfg.enable_long)}", f"{p}:t:long"),
-            _btn(f"Шорт {_flag(cfg.enable_short)}", f"{p}:t:short"),
             _btn(f"Дамп {_flag(cfg.enable_dump)}", f"{p}:t:dump"),
         ],
         [_btn("🟢 Период лонг", f"{p}:s:long:period"), _btn("➗ % лонг", f"{p}:s:long:pct")],
-        [_btn("🔴 Период шорт", f"{p}:s:short:period"), _btn("➗ % шорт", f"{p}:s:short:pct")],
         [_btn("🔻 Период дамп", f"{p}:s:dump:period"), _btn("➗ % дамп", f"{p}:s:dump:pct")],
         [_btn("💧 Мин. оборот 24ч", f"{p}:s:turnover:value")],
         [

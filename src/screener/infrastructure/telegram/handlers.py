@@ -21,6 +21,7 @@ from screener.infrastructure.telegram.commercial_texts import started_users_mess
 from screener.infrastructure.telegram.help_text import build_help_messages
 from screener.infrastructure.telegram.keyboards import (
     settings_keyboard,
+    symbol_limits_keyboard,
     trading_keyboard,
     trading_mainnet_confirm_keyboard,
 )
@@ -34,11 +35,14 @@ from screener.infrastructure.telegram.profiles_view import (
     profiles_list_text,
 )
 from screener.infrastructure.telegram.settings_input import (
+    DAILY_LIMIT_HINT,
     FIELDS,
     RULES,
     SettingInputError,
+    apply_daily_limit,
     apply_setting_text,
     prompt_for,
+    remove_daily_limit,
     toggle_rule,
 )
 from screener.infrastructure.telegram.trade_lifecycle_format import format_money
@@ -174,14 +178,6 @@ def _settings_text(settings: ScreenerSettings, profile_name: str | None = None) 
             settings.enable_long,
         ),
         _rule_line(
-            "🔴",
-            "Шорт",
-            settings.short_threshold_pct,
-            settings.short_interval_sec,
-            settings.enable_short,
-            signed=True,
-        ),
-        _rule_line(
             "🔻",
             "Дамп",
             settings.dump_threshold_pct,
@@ -190,6 +186,12 @@ def _settings_text(settings: ScreenerSettings, profile_name: str | None = None) 
             signed=True,
         ),
     ]
+    if settings.symbol_daily_limits:
+        caps = ", ".join(
+            f"{symbol}≤{settings.symbol_daily_limits[symbol]}"
+            for symbol in sorted(settings.symbol_daily_limits)
+        )
+        lines.append(f"Лимиты/сутки UTC: {caps}")
     if settings.exclude_symbols:
         lines.append(f"Исключения: {', '.join(sorted(settings.exclude_symbols))}")
     if profile_name:
@@ -536,6 +538,65 @@ async def on_toggle_exchange(query: CallbackQuery, state: AppState) -> None:
     await query.answer("Обновлено")
 
 
+DAILY_LIMIT_EDIT = "daily_limit"
+
+
+def _limits_screen(state: AppState) -> tuple[str, InlineKeyboardMarkup]:
+    settings = state.signal_engine.settings
+    if settings.symbol_daily_limits:
+        body = "\n".join(
+            f"• <code>{html.escape(symbol)}</code> — максимум "
+            f"{settings.symbol_daily_limits[symbol]} сигнал(ов) в сутки UTC"
+            for symbol in sorted(settings.symbol_daily_limits)
+        )
+    else:
+        body = "Пока нет лимитов. Добавьте пару и максимум сигналов в сутки UTC."
+    text = (
+        "<b>Лимиты сигналов по монетам</b>\n"
+        f"{body}\n\n"
+        "<i>Нажмите на пару, чтобы удалить лимит. Счётчик сбрасывается в 00:00 UTC.</i>"
+    )
+    return text, symbol_limits_keyboard(settings)
+
+
+@router.callback_query(F.data.startswith("limits:"))
+async def on_symbol_limits(query: CallbackQuery, state: AppState) -> None:
+    assert query.data is not None and query.from_user is not None
+    parts = query.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "list":
+        if query.message is not None:
+            text, markup = _limits_screen(state)
+            await query.message.edit_text(text, reply_markup=markup)
+        await query.answer()
+        return
+    if action == "back":
+        if query.message is not None:
+            text, markup = _settings_screen(state)
+            await query.message.edit_text(text, reply_markup=markup)
+        await query.answer()
+        return
+    if action == "add":
+        state.begin_setting_edit(query.from_user.id, DAILY_LIMIT_EDIT, "add")
+        if query.message is not None:
+            await query.message.answer(DAILY_LIMIT_HINT)
+        await query.answer()
+        return
+    if action == "del" and len(parts) == 3:
+        try:
+            updated = remove_daily_limit(state.signal_engine.settings, parts[2])
+            await state.apply_settings(updated, chat_id=query.from_user.id)
+        except ProfileError as exc:
+            await query.answer(str(exc)[:190], show_alert=True)
+            return
+        if query.message is not None:
+            text, markup = _limits_screen(state)
+            await query.message.edit_text(text, reply_markup=markup)
+        await query.answer("Удалено")
+        return
+    await query.answer("Неизвестное действие", show_alert=True)
+
+
 @router.callback_query(F.data.startswith("toggle:"))
 async def on_toggle_rule(query: CallbackQuery, state: AppState) -> None:
     assert query.data is not None and query.from_user is not None
@@ -584,6 +645,21 @@ async def on_setting_value(message: Message, state: AppState) -> None:
     kind, field_name = pending
     if kind == PROFILE_EDIT:
         await _on_profile_text(message, state, field_name)
+        return
+    if kind == DAILY_LIMIT_EDIT:
+        try:
+            updated = apply_daily_limit(state.signal_engine.settings, message.text)
+        except SettingInputError as exc:
+            await message.answer(f"{html.escape(str(exc))}\n{DAILY_LIMIT_HINT}")
+            return
+        state.clear_pending_edit(message.from_user.id)
+        try:
+            await state.apply_settings(updated, chat_id=message.from_user.id)
+        except ProfileError as exc:
+            await message.answer(html.escape(str(exc)))
+            return
+        text, markup = _limits_screen(state)
+        await message.answer(text, reply_markup=markup)
         return
     try:
         updated = apply_setting_text(

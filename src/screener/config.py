@@ -9,7 +9,17 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 TRADFI_SYMBOL_TYPES = frozenset({"stock", "ETF", "commodity", "forex"})
 MAX_RULE_INTERVAL_SEC = 3600
 # Bump when ScreenerSettings fields change; stored profile versions carry it.
-MONITORING_CONFIG_SCHEMA_VERSION = 1
+MONITORING_CONFIG_SCHEMA_VERSION = 2
+
+
+def normalize_symbol(symbol: str) -> str:
+    """Canonical contract id: ``BTC`` / ``btcusdt`` → ``BTCUSDT``."""
+    raw = symbol.strip().upper().replace("/", "").replace("-", "").replace(" ", "")
+    if not raw:
+        return raw
+    if raw.endswith("USDT"):
+        return raw
+    return f"{raw}USDT"
 
 
 class ScreenerSettings(BaseModel):
@@ -18,7 +28,8 @@ class ScreenerSettings(BaseModel):
     enable_long: bool = True
     long_threshold_pct: float = Field(default=40.0, gt=0)
     long_interval_sec: int = 720
-    enable_short: bool = True
+    # Kept for profile JSON / history; DROP is no longer evaluated by the engine.
+    enable_short: bool = False
     short_threshold_pct: float = Field(default=10.0, gt=0)
     short_interval_sec: int = 1800
     enable_dump: bool = True
@@ -30,6 +41,8 @@ class ScreenerSettings(BaseModel):
     reset_ratio: float = Field(default=0.5, gt=0, le=1)
     reset_hold_sec: int = Field(default=60, ge=0)
     exclude_symbols: set[str] = Field(default_factory=set)
+    # Per-symbol max admin signals per UTC calendar day; empty = no caps.
+    symbol_daily_limits: dict[str, int] = Field(default_factory=dict)
     # Allow signals whose reference point came from REST kline warmup/backfill.
     allow_mixed_history: bool = True
     # Rule matches of one symbol+direction within this window become one alert.
@@ -55,10 +68,32 @@ class ScreenerSettings(BaseModel):
             return {str(s).strip().upper() for s in value if str(s).strip()}
         raise TypeError("exclude_symbols must be a comma-separated string or collection")
 
+    @field_validator("symbol_daily_limits", mode="before")
+    @classmethod
+    def _parse_daily_limits(cls, value: object) -> dict[str, int]:
+        if value is None or value == "":
+            return {}
+        if isinstance(value, dict):
+            out: dict[str, int] = {}
+            for key, raw in value.items():
+                symbol = normalize_symbol(str(key))
+                if not symbol:
+                    continue
+                limit = int(raw)
+                if limit < 1:
+                    raise ValueError("symbol_daily_limits values must be >= 1")
+                out[symbol] = limit
+            return out
+        raise TypeError("symbol_daily_limits must be a mapping of symbol to max count")
+
     def canonical_config(self) -> dict[str, Any]:
         """Complete JSON-safe snapshot with a deterministic field/value order."""
         data = self.model_dump(mode="json")
         data["exclude_symbols"] = sorted(self.exclude_symbols)
+        data["symbol_daily_limits"] = {
+            symbol: self.symbol_daily_limits[symbol]
+            for symbol in sorted(self.symbol_daily_limits)
+        }
         return data
 
     def config_hash(self) -> str:
@@ -75,15 +110,19 @@ class ScreenerSettings(BaseModel):
     @classmethod
     def from_profile_config(cls, config: dict[str, Any], schema_version: int) -> ScreenerSettings:
         """Validate a stored profile snapshot; profiles are complete, never overlays."""
+        data = dict(config)
+        if schema_version == 1:
+            data.setdefault("symbol_daily_limits", {})
+            schema_version = 2
         if schema_version != MONITORING_CONFIG_SCHEMA_VERSION:
             raise ValueError(f"unsupported monitoring config schema v{schema_version}")
-        missing = set(cls.model_fields) - set(config)
+        missing = set(cls.model_fields) - set(data)
         if missing:
             raise ValueError(f"incomplete profile config, missing: {', '.join(sorted(missing))}")
-        unknown = set(config) - set(cls.model_fields)
+        unknown = set(data) - set(cls.model_fields)
         if unknown:
             raise ValueError(f"unknown profile config fields: {', '.join(sorted(unknown))}")
-        return cls.model_validate(config)
+        return cls.model_validate(data)
 
 
 class SystemSettings(BaseSettings):
@@ -104,11 +143,11 @@ class SystemSettings(BaseSettings):
 
     bybit_rest_base: str = "https://api.bybit.com"
     bybit_ws_linear: str = "wss://stream.bybit.com/v5/public/linear"
-    binance_enabled: bool = True
+    binance_enabled: bool = False
     binance_rest_base: str = "https://fapi.binance.com"
     binance_ws_market: str = "wss://fstream.binance.com/market/stream?streams=!ticker@arr"
     binance_kline_concurrency: int = Field(default=4, ge=1, le=20)
-    bitget_enabled: bool = True
+    bitget_enabled: bool = False
     bitget_rest_base: str = "https://api.bitget.com"
     bitget_ws_public: str = "wss://ws.bitget.com/v3/ws/public"
     bitget_symbols_per_connection: int = Field(default=40, ge=1, le=200)
@@ -145,7 +184,7 @@ class SystemSettings(BaseSettings):
     enable_long: bool = True
     long_threshold_pct: float = 40.0
     long_interval_sec: int = 720
-    enable_short: bool = True
+    enable_short: bool = False
     short_threshold_pct: float = 10.0
     short_interval_sec: int = 1800
     enable_dump: bool = True
@@ -208,6 +247,7 @@ class SystemSettings(BaseSettings):
             reset_ratio=self.reset_ratio,
             reset_hold_sec=self.reset_hold_sec,
             exclude_symbols=self.exclude_symbols,
+            symbol_daily_limits={},
             allow_mixed_history=self.allow_mixed_history,
             correlation_window_ms=self.signal_correlation_ms,
             max_tick_age_ms=self.max_tick_age_ms,

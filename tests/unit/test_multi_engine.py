@@ -168,4 +168,4 @@ def test_no_groups_is_a_noop_and_excluded_symbols_skip() -> None:
     assert engine.evaluate(_event("AUSDT", 1, 1.0)) == 0
     engine.set_groups({"a": settings(exclude_symbols={"XUSDT"})})
     assert engine.evaluate(_event("XUSDT", 1, 1.0)) == 0
-    assert engine.max_interval_sec == 1800
+    assert engine.max_interval_sec == 900

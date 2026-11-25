@@ -95,7 +95,7 @@ class UserDetectionConfig(BaseModel):
     enable_long: bool = True
     long_threshold_pct: float = Field(default=40.0, gt=0, le=500)
     long_interval_sec: int = 720
-    enable_short: bool = True
+    enable_short: bool = False
     short_threshold_pct: float = Field(default=10.0, gt=0, le=500)
     short_interval_sec: int = 1800
     enable_dump: bool = True

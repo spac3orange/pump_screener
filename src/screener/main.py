@@ -216,6 +216,7 @@ async def build_runtime(
     state.apply_profile(active_profile, False)
     correlator.on_signal = state.dispatch_signal
     state.admin_exchanges = await _load_admin_exchanges(repo)
+    await _seed_symbol_daily_limiter(state)
 
     binance_history = PriceHistoryManager() if system.binance_enabled else None
     bitget_history = PriceHistoryManager() if system.bitget_enabled else None
@@ -277,9 +278,26 @@ async def build_runtime(
 async def _load_admin_exchanges(repo: Repository) -> set[str]:
     raw = await repo.get_app_setting("admin_exchanges")
     if not raw:
-        return set(ALL_EXCHANGES)
+        return {BYBIT}
     chosen = set(normalize_exchanges(raw.get("exchanges")))
-    return chosen or set(ALL_EXCHANGES)
+    return chosen or {BYBIT}
+
+
+async def _seed_symbol_daily_limiter(state: AppState) -> None:
+    limits = state.signal_engine.settings.symbol_daily_limits
+    if not limits:
+        return
+    try:
+        counts = await state.repo.count_signals_since_utc_day(symbols=set(limits))
+    except Exception:
+        logger.exception("Failed to seed symbol daily limiter from DB")
+        return
+    state.symbol_daily_limiter.seed(counts)
+    logger.info(
+        "Seeded symbol daily limiter for %d capped symbol(s) (%d counter keys)",
+        len(limits),
+        len(counts),
+    )
 
 
 def _build_binance_feed(
