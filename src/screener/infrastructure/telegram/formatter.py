@@ -63,6 +63,9 @@ def format_signal_message(
         f"{_EMOJI[primary.signal_type]} {_LABELS[primary.signal_type]}: {_match_body(primary)}",
         f"🔉 Signal 24h: {signals_24h}",
     ]
+    profile_name = getattr(signal, "monitoring_profile_name", None)
+    if profile_name:
+        lines.append(f"📁 Профиль: {escape(str(profile_name))}")
     if trade_action:
         lines.append(f"🤖 Автоторговля: {escape(trade_action)}")
     return "\n".join(lines)

@@ -81,6 +81,15 @@ def test_admin_alert_names_auto_trading_side() -> None:
     assert text.endswith("🔉 Signal 24h: 1\n🤖 Автоторговля: SHORT")
 
 
+def test_signal_message_includes_profile_name() -> None:
+    signal = make_signal(
+        SignalType.PUMP, 180, 12.0, monitoring_profile_name="Night <fast>"
+    )
+    text = format_signal_message(signal, signals_24h=1)
+    assert "📁 Профиль: Night &lt;fast&gt;" in text
+    assert format_signal_message(make_signal(SignalType.PUMP, 180, 12.0)).count("Профиль") == 0
+
+
 def test_short_message_uses_red_circle() -> None:
     signal = make_signal(SignalType.DROP, 1800, -10.09, prev_price=0.0114, price=0.01025)
     assert "🔴 Шорт: -10.09% (0.0114-0.01025)" in format_signal_message(signal)

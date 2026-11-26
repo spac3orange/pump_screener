@@ -18,6 +18,7 @@ class MarketFeed:
     correlator: Any
     stats: Any
     commercial_engine: Any = None
+    profile_monitor: Any = None
     registry: Any = None
     ws: Any = None
     rest: Any = None
@@ -42,6 +43,7 @@ class MarketFeed:
             correlator=getattr(state, "correlator", None),
             stats=metrics,
             commercial_engine=getattr(state, "commercial_engine", None),
+            profile_monitor=getattr(state, "profile_monitor", None),
             registry=getattr(state, "registry", None),
             ws=getattr(state, "ws_manager", None),
             rest=getattr(state, "rest", None),

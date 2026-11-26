@@ -11,6 +11,7 @@ from screener.application.market_processor import MarketDataProcessor
 from screener.application.notification_service import NotificationService
 from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
+from screener.application.profile_monitor import ProfileMonitor
 from screener.application.profiles import ActiveProfile, ProfileService
 from screener.application.signal_engine import SignalEngine
 from screener.application.trading.lifecycle import PositionLifecycleService
@@ -58,6 +59,8 @@ class AppState:
     admin_exchanges: set[str] = field(default_factory=lambda: {BYBIT})
     feeds: dict[str, Any] = field(default_factory=dict)
     symbol_daily_limiter: SymbolDailyLimiter = field(default_factory=SymbolDailyLimiter)
+    profile_monitor: ProfileMonitor | None = None
+    profile_monitors: list[ProfileMonitor] = field(default_factory=list)
     # telegram user_id -> (kind, field, monotonic deadline); bounded and expiring because
     # subscribers can open prompts too.
     pending_edits: dict[int, tuple[str, str, float]] = field(default_factory=dict)
@@ -67,17 +70,35 @@ class AppState:
         self._dispatch(signal, to_trading=True)
 
     def dispatch_monitor_signal(self, signal: MarketSignal) -> None:
-        """Non-Bybit MarketSignal: persistence and Telegram only; never trading."""
+        """Persistence and Telegram only; never trading (multi-profile admin path)."""
         self._dispatch(signal, to_trading=False)
+
+    def _profile_settings_for_signal(self, signal: MarketSignal) -> ScreenerSettings | None:
+        pid = signal.monitoring_profile_id
+        if pid is None:
+            return None
+        key = str(pid)
+        for monitor in self.profile_monitors:
+            settings = monitor.settings_for(key)
+            if settings is not None:
+                return settings
+        return None
 
     def _dispatch(self, signal: MarketSignal, *, to_trading: bool) -> None:
         limits: dict[str, int] = {}
-        if self.signal_engine is not None:
+        profile_settings = self._profile_settings_for_signal(signal)
+        if profile_settings is not None:
+            limits = profile_settings.symbol_daily_limits
+        elif self.signal_engine is not None:
             limits = self.signal_engine.settings.symbol_daily_limits
         cap = limits.get(signal.symbol)
+        profile_id = (
+            str(signal.monitoring_profile_id) if signal.monitoring_profile_id is not None else None
+        )
         if not self.symbol_daily_limiter.allow(
             signal.symbol,
             exchange=signal.exchange,
+            profile_id=profile_id,
             limit=cap,
             now=signal.detected_at,
         ):
@@ -112,8 +133,29 @@ class AppState:
             self.trading.enqueue(signal)
         if cap is not None:
             self.symbol_daily_limiter.record(
-                signal.symbol, signal.exchange, now=signal.detected_at
+                signal.symbol,
+                signal.exchange,
+                profile_id=profile_id,
+                now=signal.detected_at,
             )
+
+    async def rebuild_profile_monitors(self) -> None:
+        """Reload all monitoring profiles into every feed's ProfileMonitor."""
+        if self.profiles is None or not self.profile_monitors:
+            return
+        items = await self.profiles.list_profiles()
+        system = self.signal_engine.settings if self.signal_engine is not None else ScreenerSettings()
+        for monitor in self.profile_monitors:
+            monitor.rebuild(items, system)
+        log(
+            logger,
+            logging.INFO,
+            f"Profile monitors rebuilt: {len(items)} profile(s), "
+            f"{len(self.profile_monitors)} feed(s)",
+            component="app_state",
+            event="profile_monitors_rebuilt",
+            count=len(items),
+        )
 
     async def set_admin_exchanges(self, exchanges: set[str]) -> None:
         self.admin_exchanges = set(exchanges)

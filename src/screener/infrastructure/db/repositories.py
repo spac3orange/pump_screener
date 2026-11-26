@@ -151,11 +151,11 @@ class Repository:
         *,
         now: datetime | None = None,
         symbols: set[str] | None = None,
-    ) -> dict[tuple[str, str], int]:
+    ) -> dict[tuple[str, str, str | None], int]:
         """Counts of persisted signals for the current UTC calendar day.
 
-        Returns ``{(exchange, symbol): count}``. When ``symbols`` is set, only
-        those symbols are counted (empty set → empty result).
+        Returns ``{(exchange, symbol, profile_id|None): count}``. When
+        ``symbols`` is set, only those symbols are counted (empty set → empty).
         """
         instant = now if now is not None else datetime.now(UTC)
         if instant.tzinfo is None:
@@ -170,11 +170,23 @@ class Repository:
             conditions.append(SignalRow.symbol.in_(sorted(symbols)))
         async with session_scope(self._sf) as session:
             result = await session.execute(
-                select(SignalRow.exchange, SignalRow.symbol, func.count())
+                select(
+                    SignalRow.exchange,
+                    SignalRow.symbol,
+                    SignalRow.monitoring_profile_id,
+                    func.count(),
+                )
                 .where(*conditions)
-                .group_by(SignalRow.exchange, SignalRow.symbol)
+                .group_by(
+                    SignalRow.exchange,
+                    SignalRow.symbol,
+                    SignalRow.monitoring_profile_id,
+                )
             )
-            return {(str(ex), str(sym)): int(n) for ex, sym, n in result.all()}
+            return {
+                (str(ex), str(sym), str(pid) if pid is not None else None): int(n)
+                for ex, sym, pid, n in result.all()
+            }
 
     async def recent_signals(self, limit: int = 20) -> list[SignalRow]:
         async with session_scope(self._sf) as session:

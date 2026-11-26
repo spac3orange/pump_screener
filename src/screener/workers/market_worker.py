@@ -103,7 +103,11 @@ class MarketWorker:
         try:
             feed.history.record(event.symbol, ts_ms=event.exchange_ts_ms, price=event.last_price)
             if event.kind is PriceEventKind.LIVE and feed.evaluate_admin:
-                feed.signal_engine.evaluate(event)
+                monitor = getattr(feed, "profile_monitor", None)
+                if monitor is not None:
+                    monitor.evaluate(event)
+                else:
+                    feed.signal_engine.evaluate(event)
         except Exception:
             metrics.record_error()
             logger.exception(

@@ -86,6 +86,7 @@ class ActiveProfile:
 
 
 ApplyFunc = Callable[[ActiveProfile, bool], None]
+CatalogChangedFunc = Callable[[], Awaitable[None]]
 EventLogFunc = Callable[..., Awaitable[None]]
 LegacyLoader = Callable[[], Awaitable[ScreenerSettings]]
 
@@ -109,10 +110,12 @@ class ProfileService:
         store: ProfileStore,
         *,
         apply: ApplyFunc | None = None,
+        on_catalog_changed: CatalogChangedFunc | None = None,
         event_log: EventLogFunc | None = None,
     ) -> None:
         self._store = store
         self._apply = apply
+        self._on_catalog_changed = on_catalog_changed
         self._event_log = event_log
         self._lock = asyncio.Lock()
         self._active: ActiveProfile | None = None
@@ -126,10 +129,18 @@ class ProfileService:
     def set_apply(self, apply: ApplyFunc) -> None:
         self._apply = apply
 
+    def set_on_catalog_changed(self, callback: CatalogChangedFunc) -> None:
+        self._on_catalog_changed = callback
+
     def _set_active(self, active: ActiveProfile, *, reset_dedup: bool) -> None:
         self._active = active
         if self._apply is not None:
             self._apply(active, reset_dedup)
+
+    async def _notify_catalog_changed(self) -> None:
+        if self._on_catalog_changed is None:
+            return
+        await self._on_catalog_changed()
 
     async def bootstrap(self, legacy_loader: LegacyLoader) -> ActiveProfile:
         async with self._lock:
@@ -148,6 +159,7 @@ class ProfileService:
                 component="profiles",
                 event="profile_bootstrap",
             )
+            await self._notify_catalog_changed()
             return active
 
     async def _migrate_legacy(self, legacy_loader: LegacyLoader) -> ActiveProfile:
@@ -234,6 +246,7 @@ class ProfileService:
             f"Created profile {clean}",
             {"profile_id": str(profile.id), "chat_id": chat_id},
         )
+        await self._notify_catalog_changed()
         return profile
 
     async def rename(self, profile_id: UUID, name: str) -> MonitoringProfile:
@@ -246,6 +259,7 @@ class ProfileService:
                 self._set_active(
                     ActiveProfile(settings=active.settings, profile=profile), reset_dedup=False
                 )
+        await self._notify_catalog_changed()
         return profile
 
     async def delete(self, profile_id: UUID) -> None:
@@ -264,6 +278,7 @@ class ProfileService:
             f"Deleted profile {profile.name}",
             {"profile_id": str(profile_id)},
         )
+        await self._notify_catalog_changed()
 
     async def activate(self, profile_id: UUID, *, chat_id: int | None = None) -> ActiveProfile:
         async with self._lock:
@@ -292,6 +307,7 @@ class ProfileService:
                 "chat_id": chat_id,
             },
         )
+        await self._notify_catalog_changed()
         return active
 
     async def update_active_settings(
@@ -320,7 +336,8 @@ class ProfileService:
             )
             active = ActiveProfile(settings=validated, profile=profile)
             self._set_active(active, reset_dedup=False)
-            return active
+        await self._notify_catalog_changed()
+        return active
 
     async def _log_event(self, event_type: str, message: str, details: dict) -> None:
         if self._event_log is None:

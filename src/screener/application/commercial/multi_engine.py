@@ -84,9 +84,11 @@ class MultiConfigEngine:
         system: ScreenerSettings,
         *,
         on_matches: GroupMatchHandler | None = None,
+        track_commercial_metrics: bool = True,
     ) -> None:
         self._history = history
         self.on_matches = on_matches
+        self._track_commercial_metrics = track_commercial_metrics
         # (symbol, type, interval) -> group keys holding dedup state there.
         self._active: dict[tuple[str, SignalType, int], set[str]] = {}
         self._c = _Compiled(system=system, groups={}, buckets=(), windows=())
@@ -153,7 +155,8 @@ class MultiConfigEngine:
             buckets=tuple(buckets),
             windows=tuple(sorted({b.interval_sec for b in buckets})),
         )
-        metrics.commercial_groups = len(new_groups)
+        if self._track_commercial_metrics:
+            metrics.commercial_groups = len(new_groups)
 
     def clear_symbol(self, symbol: str) -> None:
         for group in self._c.groups.values():
@@ -169,7 +172,10 @@ class MultiConfigEngine:
         symbol = event.symbol
         if symbol in system.exclude_symbols:
             return 0
-        metrics.commercial_evaluations_total += 1
+        if self._track_commercial_metrics:
+            metrics.commercial_evaluations_total += 1
+        else:
+            metrics.engine_evaluations_total += 1
 
         now_ms = event.exchange_ts_ms
         price = event.last_price
@@ -202,6 +208,8 @@ class MultiConfigEngine:
             triggered_keys = bucket.keys[:n]
             for key in triggered_keys:
                 group = groups[key]
+                if symbol in group.settings.exclude_symbols:
+                    continue
                 triggered = turnover >= group.settings.min_turnover_24h_usdt
                 if not triggered and (states is None or key not in states):
                     continue
@@ -211,8 +219,11 @@ class MultiConfigEngine:
                 for key in list(states):
                     if key in hit:
                         continue
+                    group = groups[key]
+                    if symbol in group.settings.exclude_symbols:
+                        continue
                     self._step(
-                        groups[key], bucket, akey, lookup, change, price, now_ms, False, found
+                        group, bucket, akey, lookup, change, price, now_ms, False, found
                     )
 
         if not found:
@@ -222,7 +233,8 @@ class MultiConfigEngine:
             total += len(matches)
             if self.on_matches is not None:
                 self.on_matches(event, key, matches)
-        metrics.commercial_rule_matches_total += total
+        if self._track_commercial_metrics:
+            metrics.commercial_rule_matches_total += total
         return total
 
     def _step(

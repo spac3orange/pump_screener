@@ -44,6 +44,17 @@ def test_seed_replaces_counts() -> None:
     assert not limiter.allow("BTCUSDT", limit=3, now=now)
 
 
+def test_profile_scoped_counters_are_independent() -> None:
+    limiter = SymbolDailyLimiter()
+    now = datetime(2026, 11, 23, 8, 0, tzinfo=UTC)
+    limiter.record("BTCUSDT", profile_id="p1", now=now)
+    assert not limiter.allow("BTCUSDT", profile_id="p1", limit=1, now=now)
+    assert limiter.allow("BTCUSDT", profile_id="p2", limit=1, now=now)
+    limiter.seed({("bybit", "BTCUSDT", "p2"): 2}, now=now)
+    assert limiter.count("BTCUSDT", profile_id="p2", now=now) == 2
+    assert limiter.count("BTCUSDT", profile_id="p1", now=now) == 0
+
+
 def test_dispatch_skips_when_daily_limit_reached() -> None:
     class _Persist:
         def __init__(self) -> None:

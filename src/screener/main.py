@@ -21,6 +21,7 @@ from screener.application.metrics import metrics
 from screener.application.notification_service import NotificationService
 from screener.application.persistence_service import PersistenceService
 from screener.application.price_history import PriceHistoryManager
+from screener.application.profile_monitor import ProfileMonitor
 from screener.application.profiles import ActiveProfile, ProfileService
 from screener.application.signal_engine import SignalEngine
 from screener.application.trading.service import TradingService
@@ -213,10 +214,20 @@ async def build_runtime(
         extras={"engine": engine, "lifecycle_runtime": lifecycle},
     )
     profiles.set_apply(state.apply_profile)
+    profiles.set_on_catalog_changed(state.rebuild_profile_monitors)
     state.apply_profile(active_profile, False)
-    correlator.on_signal = state.dispatch_signal
+    # Multi-profile admin path never feeds trading (BYBIT_TRADING_MODE=disabled).
+    correlator.on_signal = state.dispatch_monitor_signal
     state.admin_exchanges = await _load_admin_exchanges(repo)
-    await _seed_symbol_daily_limiter(state)
+
+    bybit_monitor = ProfileMonitor(
+        history,
+        correlator,
+        screener_settings,
+        ensure_capacity=history.ensure_capacity,
+    )
+    state.profile_monitor = bybit_monitor
+    state.profile_monitors = [bybit_monitor]
 
     binance_history = PriceHistoryManager() if system.binance_enabled else None
     bitget_history = PriceHistoryManager() if system.bitget_enabled else None
@@ -238,6 +249,7 @@ async def build_runtime(
         )
 
     bybit_feed = MarketFeed.from_app_state(state)
+    bybit_feed.profile_monitor = bybit_monitor
     state.feeds[BYBIT] = bybit_feed
     workers = [MarketWorker(state, feed=bybit_feed)]
     if binance_history is not None:
@@ -254,6 +266,8 @@ async def build_runtime(
         bitget_feed.evaluate_admin = BITGET in state.admin_exchanges
     # Feeds above were built after the first apply: give them profile context and exclusions.
     state.apply_profile(active_profile, False)
+    await state.rebuild_profile_monitors()
+    await _seed_symbol_daily_limiter(state)
 
     tg: TelegramBotService | None = None
     if system.telegram_bot_token and system.admin_id:
@@ -284,18 +298,22 @@ async def _load_admin_exchanges(repo: Repository) -> set[str]:
 
 
 async def _seed_symbol_daily_limiter(state: AppState) -> None:
-    limits = state.signal_engine.settings.symbol_daily_limits
-    if not limits:
+    symbols: set[str] = set()
+    for monitor in state.profile_monitors:
+        symbols |= monitor.capped_symbols()
+    if not symbols and state.signal_engine is not None:
+        symbols = set(state.signal_engine.settings.symbol_daily_limits)
+    if not symbols:
         return
     try:
-        counts = await state.repo.count_signals_since_utc_day(symbols=set(limits))
+        counts = await state.repo.count_signals_since_utc_day(symbols=symbols)
     except Exception:
         logger.exception("Failed to seed symbol daily limiter from DB")
         return
     state.symbol_daily_limiter.seed(counts)
     logger.info(
         "Seeded symbol daily limiter for %d capped symbol(s) (%d counter keys)",
-        len(limits),
+        len(symbols),
         len(counts),
     )
 
@@ -318,6 +336,10 @@ def _build_binance_feed(
         on_signal=state.dispatch_monitor_signal,
     )
     signal_engine.on_matches = correlator.add
+    monitor = ProfileMonitor(
+        history, correlator, settings, ensure_capacity=history.ensure_capacity
+    )
+    state.profile_monitors.append(monitor)
     registry = InstrumentRegistry(
         None,
         refresh_sec=system.instrument_refresh_sec,
@@ -352,6 +374,7 @@ def _build_binance_feed(
         correlator=correlator,
         stats=stats,
         commercial_engine=commercial_engine,
+        profile_monitor=monitor,
         registry=registry,
         ws=ws,
         rest=rest,
@@ -384,6 +407,10 @@ def _build_bitget_feed(
         on_signal=state.dispatch_monitor_signal,
     )
     signal_engine.on_matches = correlator.add
+    monitor = ProfileMonitor(
+        history, correlator, settings, ensure_capacity=history.ensure_capacity
+    )
+    state.profile_monitors.append(monitor)
     registry = InstrumentRegistry(
         None,
         refresh_sec=system.instrument_refresh_sec,
@@ -419,6 +446,7 @@ def _build_bitget_feed(
         correlator=correlator,
         stats=stats,
         commercial_engine=commercial_engine,
+        profile_monitor=monitor,
         registry=registry,
         ws=ws,
         rest=rest,
