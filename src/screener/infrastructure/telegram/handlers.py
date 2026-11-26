@@ -30,8 +30,7 @@ from screener.infrastructure.telegram.profiles_view import (
     confirm_keyboard,
     profile_card_keyboard,
     profile_card_text,
-    profiles_list_keyboard,
-    profiles_list_text,
+    profiles_list_page,
     usd_short,
 )
 from screener.infrastructure.telegram.settings_input import (
@@ -751,10 +750,11 @@ def _active_id(profiles: ProfileService) -> UUID | None:
     return active.profile.id if active.profile else None
 
 
-async def _profiles_screen(profiles: ProfileService) -> tuple[str, InlineKeyboardMarkup]:
+async def _profiles_screen(
+    profiles: ProfileService, *, page: int = 0
+) -> tuple[str, InlineKeyboardMarkup]:
     items = await profiles.list_profiles()
-    active_id = _active_id(profiles)
-    return profiles_list_text(items, active_id), profiles_list_keyboard(items, active_id)
+    return profiles_list_page(items, _active_id(profiles), page=page)
 
 
 async def _card_screen(
@@ -782,15 +782,18 @@ async def cmd_profiles(message: Message, state: AppState) -> None:
     await message.answer(text, reply_markup=markup)
 
 
-def _parse_profile_callback(data: str) -> tuple[str, UUID | None]:
+def _parse_profile_callback(data: str) -> tuple[str, UUID | None, int]:
     parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
+    if action == "list":
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        return "list", None, page
     if len(parts) == 3:
         try:
-            return action, UUID(parts[2])
+            return action, UUID(parts[2]), 0
         except ValueError:
-            return "", None
-    return action, None
+            return "", None, 0
+    return action, None, 0
 
 
 @router.callback_query(F.data.startswith("prof:"))
@@ -800,10 +803,10 @@ async def on_profile_action(query: CallbackQuery, state: AppState) -> None:
     if profiles is None:
         await query.answer("Профили недоступны", show_alert=True)
         return
-    action, pid = _parse_profile_callback(query.data)
+    action, pid, page = _parse_profile_callback(query.data)
     user_id = query.from_user.id
     try:
-        await _profile_action(query, state, profiles, action, pid, user_id)
+        await _profile_action(query, state, profiles, action, pid, user_id, page=page)
     except ProfileError as exc:
         await query.answer(str(exc)[:190], show_alert=True)
 
@@ -815,9 +818,11 @@ async def _profile_action(
     action: str,
     pid: UUID | None,
     user_id: int,
+    *,
+    page: int = 0,
 ) -> None:
     if action == "list":
-        await _show(query, await _profiles_screen(profiles))
+        await _show(query, await _profiles_screen(profiles, page=page))
         await query.answer()
         return
     if action == "settings":

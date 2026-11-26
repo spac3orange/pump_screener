@@ -13,6 +13,10 @@ TRADING_SWITCH_WARNING = (
     "торговых сигналов."
 )
 
+# Telegram message limit is 4096; keep a margin for markup and page footer.
+TELEGRAM_TEXT_LIMIT = 3900
+PROFILES_PAGE_SIZE = 5
+
 
 def usd_short(value: float) -> str:
     for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
@@ -42,18 +46,84 @@ def rules_summary(settings: ScreenerSettings) -> list[str]:
     return lines
 
 
-def profiles_list_text(profiles: list[MonitoringProfile], active_id: UUID | None) -> str:
-    lines = ["📁 <b>Профили мониторинга</b>", ""]
-    for p in profiles:
-        mark = "✅" if p.id == active_id else "•"
-        lines.append(f"{mark} <b>{html.escape(p.name)}</b> (v{p.current.version_no})")
-        settings = _settings_or_none(p)
-        if settings is None:
-            lines.append("   ⚠️ некорректная конфигурация")
-            continue
-        lines.extend(f"   {line}" for line in rules_summary(settings))
-    lines += ["", "Выберите профиль, чтобы активировать, скопировать или изменить."]
-    return "\n".join(lines)
+def _rules_summary_compact(settings: ScreenerSettings) -> list[str]:
+    """Shorter block for the paginated list (full details stay on the card)."""
+    s = settings
+    lines = [
+        _rule("PUMP", s.enable_long, s.long_threshold_pct, s.long_interval_sec),
+        _rule("DUMP", s.enable_dump, s.dump_threshold_pct, s.dump_interval_sec, minus=True),
+        f"Min turnover: {usd_short(s.min_turnover_24h_usdt)}",
+    ]
+    if s.symbol_daily_limits:
+        lines.append(f"Daily caps: {len(s.symbol_daily_limits)}")
+    return lines
+
+
+def _profile_block(profile: MonitoringProfile, active_id: UUID | None) -> list[str]:
+    mark = "✅" if profile.id == active_id else "•"
+    lines = [f"{mark} <b>{html.escape(profile.name)}</b> (v{profile.current.version_no})"]
+    settings = _settings_or_none(profile)
+    if settings is None:
+        lines.append("   ⚠️ некорректная конфигурация")
+        return lines
+    lines.extend(f"   {line}" for line in _rules_summary_compact(settings))
+    return lines
+
+
+def _clamp_page(page: int, total_pages: int) -> int:
+    return max(0, min(page, total_pages - 1))
+
+
+def _page_slice(
+    profiles: list[MonitoringProfile], page: int, page_size: int
+) -> tuple[list[MonitoringProfile], int, int]:
+    total_pages = max(1, (len(profiles) + page_size - 1) // page_size) if profiles else 1
+    page = _clamp_page(page, total_pages)
+    start = page * page_size
+    return profiles[start : start + page_size], page, total_pages
+
+
+def profiles_list_text(
+    profiles: list[MonitoringProfile],
+    active_id: UUID | None,
+    *,
+    page: int = 0,
+    page_size: int = PROFILES_PAGE_SIZE,
+) -> str:
+    chunk, page, total_pages = _page_slice(profiles, page, page_size)
+    lines = ["📁 <b>Профили мониторинга</b>"]
+    if total_pages > 1:
+        lines.append(f"Страница {page + 1}/{total_pages}")
+    lines.append("")
+    if not chunk:
+        lines.append("Профилей пока нет.")
+    else:
+        for p in chunk:
+            lines.extend(_profile_block(p, active_id))
+            lines.append("")
+    lines.append("Выберите профиль, чтобы активировать, скопировать или изменить.")
+    return "\n".join(lines).rstrip()
+
+
+def profiles_list_page(
+    profiles: list[MonitoringProfile],
+    active_id: UUID | None,
+    *,
+    page: int = 0,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build a page that fits Telegram's message length limit."""
+    page_size = PROFILES_PAGE_SIZE
+    while page_size >= 1:
+        text = profiles_list_text(profiles, active_id, page=page, page_size=page_size)
+        chunk, page, total_pages = _page_slice(profiles, page, page_size)
+        if len(text) <= TELEGRAM_TEXT_LIMIT or page_size == 1:
+            return text, profiles_list_keyboard(
+                chunk, active_id, page=page, total_pages=total_pages
+            )
+        page_size -= 1
+    text = profiles_list_text(profiles, active_id, page=page, page_size=1)
+    chunk, page, total_pages = _page_slice(profiles, page, 1)
+    return text, profiles_list_keyboard(chunk, active_id, page=page, total_pages=total_pages)
 
 
 def profile_card_text(profile: MonitoringProfile, *, active: bool) -> str:
@@ -95,12 +165,24 @@ def _button(text: str, data: str) -> InlineKeyboardButton:
 
 
 def profiles_list_keyboard(
-    profiles: list[MonitoringProfile], active_id: UUID | None
+    profiles: list[MonitoringProfile],
+    active_id: UUID | None,
+    *,
+    page: int = 0,
+    total_pages: int = 1,
 ) -> InlineKeyboardMarkup:
     rows = [
         [_button(f"{'✅' if p.id == active_id else '•'} {p.name}", f"prof:open:{p.id}")]
         for p in profiles
     ]
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(_button("◀️", f"prof:list:{page - 1}"))
+        nav.append(_button(f"{page + 1}/{total_pages}", f"prof:list:{page}"))
+        if page + 1 < total_pages:
+            nav.append(_button("▶️", f"prof:list:{page + 1}"))
+        rows.append(nav)
     rows.append(
         [_button("➕ Создать из текущих", "prof:new"), _button("⚙️ Настройки", "prof:settings")]
     )

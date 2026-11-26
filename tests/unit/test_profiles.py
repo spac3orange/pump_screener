@@ -27,8 +27,11 @@ from screener.domain.profiles import (
 )
 from screener.infrastructure.telegram import handlers
 from screener.infrastructure.telegram.profiles_view import (
+    PROFILES_PAGE_SIZE,
+    TELEGRAM_TEXT_LIMIT,
     profile_card_keyboard,
     profiles_list_keyboard,
+    profiles_list_page,
     profiles_list_text,
     rules_summary,
 )
@@ -598,8 +601,11 @@ async def test_profiles_view_escapes_names_and_protects_buttons() -> None:
     text = profiles_list_text(profiles, default.id)
     assert "N&lt;i&gt;" in text and "N<i>" not in text
 
-    data = [b.callback_data for row in profiles_list_keyboard(profiles, default.id).inline_keyboard
-            for b in row]
+    data = [
+        b.callback_data
+        for row in profiles_list_keyboard(profiles, default.id).inline_keyboard
+        for b in row
+    ]
     assert f"prof:open:{other.id}" in data and "prof:new" in data
     assert all(len(d.encode()) <= 64 for d in data)
 
@@ -626,6 +632,35 @@ def test_rules_summary_shows_off_rules() -> None:
     assert "PUMP: 33% / 7m" in lines
     assert any(line.startswith("DUMP: OFF") for line in lines)
     assert "Daily caps: BTCUSDT:2" in lines
+
+
+async def test_profiles_list_paginates_and_stays_under_limit() -> None:
+    service = await _service()
+    for i in range(PROFILES_PAGE_SIZE + 3):
+        await service.create_from_current(f"PageProf{i}")
+    profiles = await service.list_profiles()
+    active_id = service.active.profile.id
+    assert len(profiles) > PROFILES_PAGE_SIZE
+
+    text0, kb0 = profiles_list_page(profiles, active_id, page=0)
+    text1, kb1 = profiles_list_page(profiles, active_id, page=1)
+    assert len(text0) <= TELEGRAM_TEXT_LIMIT
+    assert len(text1) <= TELEGRAM_TEXT_LIMIT
+    assert "Страница 1/" in text0
+    assert "Страница 2/" in text1
+    assert "PageProf0" in text0 or profiles[0].name in text0
+    assert text0 != text1
+
+    data0 = [b.callback_data for row in kb0.inline_keyboard for b in row]
+    data1 = [b.callback_data for row in kb1.inline_keyboard for b in row]
+    assert "prof:list:1" in data0
+    assert "prof:list:0" in data1
+    assert all(len(d.encode()) <= 64 for d in data0 + data1)
+
+    action, pid, page = handlers._parse_profile_callback("prof:list:2")
+    assert action == "list" and pid is None and page == 2
+    action, pid, page = handlers._parse_profile_callback("prof:list")
+    assert action == "list" and page == 0
 
 
 class _Query:
